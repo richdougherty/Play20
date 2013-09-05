@@ -82,7 +82,7 @@ class ApplicationSpec extends PlaySpecification {
 
     "not serve asset directories" in new WithApplication() {
       val Some(result) = route(FakeRequest(GET, "/public//"))
-      status(result) must equalTo (NOT_FOUND)
+      status(result) must equalTo (FORBIDDEN)
     }
    
     "remove cache elements" in new WithApplication() {

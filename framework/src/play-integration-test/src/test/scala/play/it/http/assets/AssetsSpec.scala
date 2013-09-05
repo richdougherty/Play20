@@ -43,19 +43,36 @@ object AssetsSpec extends PlaySpecification {
       result.header(CACHE_CONTROL) must_== defaultCacheControl
     }
 
+    "serve an asset in a subdirectory" in withServer {
+      val result = await(wsUrl("/subdir/baz.txt").get())
+
+      result.status must_== OK
+      result.body must_== "Content of baz.txt."
+      result.header(CONTENT_TYPE) must beSome.which(_.startsWith("text/plain"))
+      result.header(ETAG) must beSome
+      result.header(LAST_MODIFIED) must beSome
+      result.header(VARY) must beNone
+      result.header(CONTENT_ENCODING) must beNone
+      result.header(CACHE_CONTROL) must_== defaultCacheControl
+    }
+
     "serve an asset with spaces in the name" in withServer {
       val result = await(wsUrl("/foo%20bar.txt").get())
 
       result.status must_== OK
       result.body must_== "This is a test asset with spaces."
       result.header(CONTENT_TYPE) must beSome.which(_.startsWith("text/plain"))
+      result.header(ETAG) must beSome
+      result.header(LAST_MODIFIED) must beSome
+      result.header(VARY) must beNone
+      result.header(CONTENT_ENCODING) must beNone
+      result.header(CACHE_CONTROL) must_== defaultCacheControl
     }
 
-    "serve an asset with URL-encoded characters" in withServer {
-      val result = await(wsUrl("/" + UriEncoding.encodePathSegment("foo+bar: baz.txt", "UTF-8")).get())
+    "serve an asset with the right mime type, despite a percent-encoded suffix" in withServer {
+      val result = await(wsUrl("/bar.t%78t").get())
 
       result.status must_== OK
-      result.body must_== "This is a test asset."
       result.header(CONTENT_TYPE) must beSome.which(_.startsWith("text/plain"))
     }
 
@@ -161,6 +178,41 @@ object AssetsSpec extends PlaySpecification {
       val result = await(wsUrl("/empty.txt").get())
 
       result.status must_== OK
+      result.body must beEmpty
+    }
+
+    "forbid access to directories" in withServer {
+      val result = await(wsUrl("/").get())
+
+      result.status must_== FORBIDDEN
+      result.body must beEmpty
+    }
+
+    "forbid access to directories" in withServer {
+      val result = await(wsUrl("/subdir/").get())
+
+      result.status must_== FORBIDDEN
+      result.body must beEmpty
+    }
+
+    "forbid access to attempts to escape the assets directory" in withServer {
+      val result = await(wsUrl("/../testassets/bar.txt").get())
+
+      result.status must_== FORBIDDEN
+      result.body must beEmpty
+    }
+
+    "forbid access to filenames with percent-encoded slashes" in withServer {
+      val result = await(wsUrl("/subdir%2fbaz.txt").get())
+
+      result.status must_== FORBIDDEN
+      result.body must beEmpty
+    }
+
+    "return 404 for files that don't exist" in withServer {
+      val result = await(wsUrl("/nosuchfile.txt").get())
+
+      result.status must_== NOT_FOUND
       result.body must beEmpty
     }
 
