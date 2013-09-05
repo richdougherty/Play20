@@ -35,12 +35,12 @@ object UriEncoding {
    * really it should leave it as unencoded.)
    *
    * @param s The string to encode.
-   * @param encoding The name of the encoding that the string `s` is encoded with.
+   * @param inputCharset The name of the encoding that the string `s` is encoded with.
    *     The string `s` will be converted to octets (bytes) using this character encoding.
    * @return An encoded string in the US-ASCII character set.
    */
-  def encodePathSegment(s: String, encoding: String): String = {
-    val in = s.getBytes(encoding)
+  def encodePathSegment(s: String, inputCharset: String): String = {
+    val in = s.getBytes(inputCharset)
     val out = new ByteArrayOutputStream()
     for (b <- in) {
       val allowed = segmentChars.get(b & 0xFF)
@@ -52,7 +52,67 @@ object UriEncoding {
         out.write(upperHex(b & 0xF))
       }
     }
-    new String(out.toByteArray(), "US-ASCII")
+    out.toString("US-ASCII")
+  }
+
+  /**
+   * Decode a string so that it can be used safely in the "path segment"
+   * part of a URI. A path segment is defined in RFC 3986. In a URI such
+   * as `http://www.example.com/abc/def?a=1&b=2` both `abc` and `def`
+   * are path segments.
+   *
+   * Path segment encoding differs from encoding for other parts of a URI.
+   * For example, the "&" character is permitted in a path segment, but
+   * has special meaning in query parameters. On the other hand, the "/"
+   * character cannot appear in a path segment, as it is the path delimiter,
+   * so it must be encoded as "%2F". These are just two examples of the
+   * differences between path segment and query string encoding; there are
+   * other differences too.
+   *
+   * When decoding path segments the `decodePathSegment` method should always
+   * be used in preference to the [[java.net.URLDecoder.decode(String,String)]]
+   * method. `URLDecoder.decode`, despite its name, actually decodes
+   * the `application/x-www-form-urlencoded` MIME format which is the encoding
+   * used for form data in HTTP GET and POST requests. This format is suitable
+   * for inclusion in the query part of a URI. But `URLDecoder.decoder` should not
+   * be used for path segment decoding.
+   *
+   * @param s The string to decode. Must use the US-ASCII character set.
+   * @param outputCharset The name of the encoding that the string `s` is encoded with.
+   *     The string `s` will be converted to octets (bytes) using this character encoding.
+   * @throws InvalidEncodingException If the input is not a valid encoded path segment.
+   * @return A decoded string in the `outputCharset` character set.
+   */
+  def decodePathSegment(s: String, outputCharset: String): String = {
+    val in = s.getBytes("US-ASCII")
+    val out = new ByteArrayOutputStream()
+    var inPos = 0
+    def next(): Int = {
+      val b = in(inPos) & 0xFF
+      inPos += 1
+      b
+    }
+    while (inPos < in.length) {
+      val b = next()
+      if (b == '%') {
+        // Read high digit
+        if (inPos >= in.length) throw new InvalidUriEncodingException(s"Cannot decode $s: % at end of string")
+        val high = fromHex(next())
+        if (high == -1) throw new InvalidUriEncodingException(s"Cannot decode $s: expected hex digit at position $inPos.")
+        // Read low digit
+        if (inPos >= in.length) throw new InvalidUriEncodingException(s"Cannot decode $s: incomplete percent encoding at end of string")
+        val low = fromHex(next())
+        if (low == -1) throw new InvalidUriEncodingException(s"Cannot decode $s: expected hex digit at position $inPos.")
+        // Write decoded byte
+        out.write((high << 4) + low)
+      } else if (segmentChars.get(b)) {
+        // This character is allowed
+        out.write(b)
+      } else {
+        throw new InvalidUriEncodingException(s"Cannot decode $s: illegal character at position $inPos.")
+      }
+    }
+    out.toString(outputCharset)
   }
 
   // RFC 3986, 3.3. Path
@@ -96,4 +156,25 @@ object UriEncoding {
     if (x < 10) (x + '0') else (x - 10 + 'A')
   }
 
+  /**
+   * Given the ASCII value of a character, return its value as a hex digit.
+   * If the character isn't a valid hex digit, return -1 instead.
+   */
+  private def fromHex(b: Int): Int = {
+    if (b >= '0' && b <= '9') {
+      b - '0'
+    } else if (b >= 'A' && b <= 'Z') {
+      10 + b - 'A'
+    } else if (b >= 'a' && b <= 'z') {
+      10 + b - 'a'
+    } else {
+      -1
+    }
+  }
+
 }
+
+/**
+ * An error caused by processing a value that isn't encoded correctly.
+ */
+class InvalidUriEncodingException(msg: String) extends RuntimeException(msg)
