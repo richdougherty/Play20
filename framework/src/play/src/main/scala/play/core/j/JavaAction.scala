@@ -5,14 +5,13 @@ package play.core.j
 
 import scala.language.existentials
 
+import play.api.libs.iteratee.Execution.trampoline
 import play.api.mvc._
 import play.mvc.{ Action => JAction, Result => JResult, SimpleResult => JSimpleResult }
 import play.mvc.Http.{ Context => JContext }
-import play.libs.F.{ Promise => JPromise }
-import scala.concurrent.Future
 import play.libs.F
-
-import play.core.Execution.Implicits.internalContext
+import play.libs.F.{ Promise => JPromise }
+import scala.concurrent.{ ExecutionContext, Future }
 
 /**
  * Retains and evaluates what is otherwise expensive reflection work on call by call basis.
@@ -52,7 +51,9 @@ trait JavaAction extends Action[play.mvc.Http.RequestBody] with JavaHelpers {
 
   def apply(req: Request[play.mvc.Http.RequestBody]): Future[SimpleResult] = {
 
-    val javaContext = createJavaContext(req)
+    val javaContext: JContext = createJavaContext(req)
+    val contextClassLoader = Thread.currentThread.getContextClassLoader
+    val trampolineWithContext: ExecutionContext = new HttpExecutionContext(contextClassLoader, javaContext, trampoline)
 
     val rootAction = new JAction[Any] {
       def call(ctx: JContext): JPromise[JSimpleResult] = {
@@ -61,7 +62,7 @@ trait JavaAction extends Action[play.mvc.Http.RequestBody] with JavaHelpers {
             case simple: JSimpleResult => JPromise.pure(simple)
             case async: play.mvc.Results.AsyncResult => async.getPromise
           }
-        })
+        }, trampolineWithContext)
       }
     }
 
@@ -87,16 +88,10 @@ trait JavaAction extends Action[play.mvc.Http.RequestBody] with JavaHelpers {
       }
     }
 
-    try {
-      JContext.current.set(javaContext)
-
-      play.libs.F.Promise.pure("").flatMap(new play.libs.F.Function[String, play.libs.F.Promise[JSimpleResult]] {
-        def apply(nothing: String) = finalAction.call(javaContext)
-      }).wrapped.map(result => createResult(javaContext, result))
-
-    } finally {
-      JContext.current.remove()
-    }
+    val actionFuture: Future[Future[JSimpleResult]] = Future { finalAction.call(javaContext).wrapped }(trampolineWithContext)
+    val flattenedActionFuture: Future[JSimpleResult] = actionFuture.flatMap(identity)(trampoline)
+    val resultFuture: Future[SimpleResult] = flattenedActionFuture.map(createResult(javaContext, _))(trampoline)
+    resultFuture
   }
 
 }
