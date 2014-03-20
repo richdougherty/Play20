@@ -11,6 +11,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import play.i18n.Lang;
 import play.Play;
+import play.libs.F.*;
+import play.libs.LazyDirtyMap;
 
 /**
  * Defines HTTP standard objects.
@@ -51,19 +53,27 @@ public class Http {
          * Creates a new HTTP context.
          *
          * @param request the HTTP request
+         */
+        public Context(Long id, play.api.mvc.RequestHeader header, Request request, Response response, Session session, Flash flash, Map<String,Object> args) {
+            this.id = id;
+            this.header = header;
+            this.request = request;
+            this.response = response;
+            this.session = session;
+            this.flash = flash;
+            this.args = args;
+        }
+
+        /**
+         * Creates a new HTTP context.
+         *
+         * @param request the HTTP request
          * @param sessionData the session data extracted from the session cookie
          * @param flashData the flash data extracted from the flash cookie
          */
         public Context(Long id, play.api.mvc.RequestHeader header, Request request, Map<String,String> sessionData, Map<String,String> flashData, Map<String,Object> args) {
-            this.id = id;
-            this.header = header;
-            this.request = request;
-            this.response = new Response();
-            this.session = new Session(sessionData);
-            this.flash = new Flash(flashData);
-            this.args = new HashMap<String,Object>(args);
+            this(id, header, request, new Response(), new Session(sessionData), new Flash(flashData), new HashMap<String,Object>(args));
         }
-
         /**
          * The context id (unique)
          */
@@ -713,48 +723,14 @@ public class Http {
      * <p>
      * Session data are encoded into an HTTP cookie, and can only contain simple <code>String</code> values.
      */
-    public static class Session extends HashMap<String,String>{
-
-        public boolean isDirty = false;
+    public static class Session extends LazyDirtyMap<String,String>{
 
         public Session(Map<String,String> data) {
-            super(data);
+            super(new HashMap<String,String>(data)); // Copies
         }
 
-        /**
-         * Removes the specified value from the session.
-         */
-        @Override
-        public String remove(Object key) {
-            isDirty = true;
-            return super.remove(key);
-        }
-
-        /**
-         * Adds the given value to the session.
-         */
-        @Override
-        public String put(String key, String value) {
-            isDirty = true;
-            return super.put(key, value);
-        }
-
-        /**
-         * Adds the given values to the session.
-         */
-        @Override
-        public void putAll(Map<? extends String,? extends String> values) {
-            isDirty = true;
-            super.putAll(values);
-        }
-
-        /**
-         * Clears the session.
-         */
-        @Override
-        public void clear() {
-            isDirty = true;
-            super.clear();
+        public Session(Function0<Map<String,String>> dataGetter) {
+            super(dataGetter); // Does NOT copy
         }
 
     }
@@ -764,48 +740,14 @@ public class Http {
      * <p>
      * Flash data are encoded into an HTTP cookie, and can only contain simple String values.
      */
-    public static class Flash extends HashMap<String,String>{
-
-        public boolean isDirty = false;
+    public static class Flash extends LazyDirtyMap<String,String>{
 
         public Flash(Map<String,String> data) {
-            super(data);
+            super(new HashMap<String,String>(data));
         }
 
-        /**
-         * Removes the specified value from the flash scope.
-         */
-        @Override
-        public String remove(Object key) {
-            isDirty = true;
-            return super.remove(key);
-        }
-
-        /**
-         * Adds the given value to the flash scope.
-         */
-        @Override
-        public String put(String key, String value) {
-            isDirty = true;
-            return super.put(key, value);
-        }
-
-        /**
-         * Adds the given values to the flash scope.
-         */
-        @Override
-        public void putAll(Map<? extends String,? extends String> values) {
-            isDirty = true;
-            super.putAll(values);
-        }
-
-        /**
-         * Clears the flash scope.
-         */
-        @Override
-        public void clear() {
-            isDirty = true;
-            super.clear();
+        public Flash(Function0<Map<String,String>> dataGetter) {
+            super(dataGetter);
         }
 
     }

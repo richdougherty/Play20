@@ -23,7 +23,7 @@ object OrderedExecutionContextSpec extends Specification {
       def run(id: Int): (CountDownLatch, AtomicInteger) = {
         val hec = new HttpExecutionContext(
           Thread.currentThread().getContextClassLoader(),
-          new Http.Context(id, null, null, Map.empty.asJava, Map.empty.asJava, Map.empty.asJava),
+          new Http.Context(id, null, null, Map.empty[String,String].asJava, Map.empty[String,String].asJava, Map.empty[String,AnyRef].asJava),
           oec)
         val numTasks = 2000
         val taskCount = new AtomicInteger()
