@@ -10,6 +10,7 @@ import play.api.libs.iteratee.ExecutionSpecification
 import play.mvc.Http
 import scala.collection.JavaConverters._
 import scala.concurrent.ExecutionContext
+import java.util.HashMap
 
 object HttpExecutionContextSpec extends Specification
   with ExecutionSpecification {
@@ -20,7 +21,7 @@ object HttpExecutionContextSpec extends Specification
       mustExecute(2) { ec =>
         val pec = ec.prepare()
         val classLoader = new ClassLoader() {}
-        val httpContext = new Http.Context(1, null, null, Map.empty.asJava, Map.empty.asJava, Map.empty.asJava)
+        val httpContext = new Http.Context(1, null, null, Map.empty[String,String].asJava, Map.empty[String,String].asJava, Map.empty[String,AnyRef].asJava)
         val hec = new HttpExecutionContext(classLoader, httpContext, pec)
 
         val hecFromThread = new LinkedBlockingQueue[ExecutionContext]()

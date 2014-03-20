@@ -3,10 +3,12 @@
  */
 package play.core.j
 
+import java.util.{ HashMap => JHashMap, Map => JMap }
 import play.mvc.{ SimpleResult => JSimpleResult }
-import play.mvc.Http.{ Context => JContext, Request => JRequest, Cookies => JCookies, Cookie => JCookie }
+import play.mvc.Http.{ Context => JContext, Cookie => JCookie, Flash => JFlash, Request => JRequest, Response => JResponse, Cookies => JCookies, Session => JSession }
 
 import play.libs.F
+import play.libs.LazyDirtyMap
 import scala.concurrent.Future
 import play.api.libs.iteratee.Execution.trampoline
 
@@ -120,14 +122,7 @@ trait JavaHelpers {
    * @param request
    */
   def createJavaContext(req: RequestHeader): JContext = {
-    new JContext(
-      req.id,
-      req,
-      createJavaRequest(req),
-      req.session.data.asJava,
-      req.flash.data.asJava,
-      req.tags.mapValues(_.asInstanceOf[AnyRef]).asJava
-    )
+    createJavaContext(req, createJavaRequest(req))
   }
 
   /**
@@ -135,7 +130,7 @@ trait JavaHelpers {
    * @param request
    */
   def createJavaContext(req: Request[RequestBody]): JContext = {
-    new JContext(req.id, req, new JRequest {
+    val jreq = new JRequest {
 
       def uri = req.uri
 
@@ -189,10 +184,33 @@ trait JavaHelpers {
 
       override def toString = req.toString
 
-    },
-      req.session.data.asJava,
-      req.flash.data.asJava,
-      req.tags.mapValues(_.asInstanceOf[AnyRef]).asJava)
+    }
+    createJavaContext(req, jreq)
+  }
+
+  /**
+   * creates a java context from a scala RequestHeader and Java Request
+   */
+  private def createJavaContext(req: RequestHeader, jreq: JRequest): JContext = {
+    def lazyCopy[A,B,B1<:B](m: Map[A,B1]) = new F.Function0[JMap[A,B]] {
+      def apply: JMap[A,B] = {
+        val jm = new JHashMap[A,B]
+        for (entry <- m) {
+          jm.put(entry._1, entry._2)
+        }
+        jm
+      }
+    }
+
+    new JContext(
+      req.id,
+      req,
+      jreq,
+      new JResponse(),
+      new JSession(lazyCopy(req.session.data)),
+      new JFlash(lazyCopy(req.flash.data)),
+      new LazyDirtyMap(lazyCopy[String,AnyRef,String](req.tags))
+    )
   }
 
   /**
