@@ -56,11 +56,11 @@ object JavaWebSocket extends JavaHelpers {
 
   // -- Bytes
 
-  def ofBytes(retrieveWebSocket: => play.mvc.WebSocket[Array[Byte]]): Handler = webSocketWrapper[Array[Byte]](retrieveWebSocket)
+  def ofBytes(retrieveWebSocket: => play.mvc.WebSocket[Array[Byte]]): play.api.mvc.WebSocket[Array[Byte]] = webSocketWrapper[Array[Byte]](retrieveWebSocket)
 
   // -- String
 
-  def ofString(retrieveWebSocket: => play.mvc.WebSocket[String]): Handler = webSocketWrapper[String](retrieveWebSocket)
+  def ofString(retrieveWebSocket: => play.mvc.WebSocket[String]): play.api.mvc.WebSocket[String] = webSocketWrapper[String](retrieveWebSocket)
 
   // -- Json (JsonNode)
 
@@ -68,5 +68,5 @@ object JavaWebSocket extends JavaHelpers {
     play.libs.Json.stringify, play.libs.Json.parse
   )
 
-  def ofJson(retrieveWebSocket: => play.mvc.WebSocket[com.fasterxml.jackson.databind.JsonNode]): Handler = webSocketWrapper[com.fasterxml.jackson.databind.JsonNode](retrieveWebSocket)
+  def ofJson(retrieveWebSocket: => play.mvc.WebSocket[com.fasterxml.jackson.databind.JsonNode]): play.api.mvc.WebSocket[com.fasterxml.jackson.databind.JsonNode] = webSocketWrapper[com.fasterxml.jackson.databind.JsonNode](retrieveWebSocket)
 }

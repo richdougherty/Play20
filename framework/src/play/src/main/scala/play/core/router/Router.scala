@@ -8,7 +8,6 @@ import org.apache.commons.lang3.reflect.MethodUtils
 
 import java.net.URI
 import scala.util.control.{ NonFatal, Exception }
-import scala.collection.concurrent.TrieMap
 import play.core.j.JavaActionAnnotations
 import play.utils.UriEncoding
 import play.api.Plugin
@@ -71,24 +70,9 @@ case class PathPattern(parts: Seq[PathPart]) {
 }
 
 /**
- * The javaActionAnnotations map holds references to Java classes.  The map is needed for performance reasons
- * (introspecting actions on every request is very slow), but in dev mode, this causes classloader leaks.
- *
- * This "plugin" hooks into the Play lifecycle to clear the map when Play shuts down.
- */
-class RouterCacheLifecycle(app: play.api.Application) extends Plugin {
-  override def onStop() {
-    Router.javaActionAnnotations.clear()
-  }
-}
-
-/**
  * provides Play's router implementation
  */
 object Router {
-
-  // Cache of annotation information for improving Java performance.
-  private[core] val javaActionAnnotations = new TrieMap[HandlerDef, JavaActionAnnotations]
 
   object Route {
 
@@ -143,7 +127,7 @@ object Router {
 
   }
 
-  case class HandlerDef(ref: AnyRef, routerPackage: String, controller: String, method: String, parameterTypes: Seq[Class[_]], verb: String, comments: String, path: String)
+  case class HandlerDef(classLoader: ClassLoader, routerPackage: String, controller: String, method: String, parameterTypes: Seq[Class[_]], verb: String, comments: String, path: String)
 
   def dynamicString(dynamic: String): String = {
     UriEncoding.encodePathSegment(dynamic, "utf-8")
@@ -155,24 +139,42 @@ object Router {
 
   // HandlerInvoker
 
-  @scala.annotation.implicitNotFound("Cannot use a method returning ${T} as an Handler")
-  trait HandlerInvoker[T] {
-    def call(call: => T, handler: HandlerDef): Handler
+  @scala.annotation.implicitNotFound("Cannot use a method returning ${T} as a Handler")
+  trait HandlerInvokerFactory[T] {
+    def createInvoker(fakeCall: => T, handlerDef: HandlerDef): HandlerInvoker[T]
   }
 
-  object HandlerInvoker {
+  trait HandlerInvoker[T] {
+    def call(call: => T): Handler
+  }
+
+  private def handlerTags(handlerDef: HandlerDef): Map[String, String] = Map(
+    play.api.Routes.ROUTE_PATTERN -> handlerDef.path,
+    play.api.Routes.ROUTE_VERB -> handlerDef.verb,
+    play.api.Routes.ROUTE_CONTROLLER -> handlerDef.controller,
+    play.api.Routes.ROUTE_ACTION_METHOD -> handlerDef.method,
+    play.api.Routes.ROUTE_COMMENTS -> handlerDef.comments
+  )
+
+  private def taggedRequest(rh: RequestHeader, tags: Map[String,String]): RequestHeader = {
+    val newTags = if (rh.tags.isEmpty) tags else rh.tags ++ tags
+    rh.copy(tags = newTags)
+  }
+
+  object HandlerInvokerFactory {
 
     import play.libs.F.{ Promise => JPromise }
     import play.mvc.{ Result => JResult }
 
-    implicit def passThrough[A <: Handler]: HandlerInvoker[A] = new HandlerInvoker[A] {
-      def call(call: => A, handler: HandlerDef): Handler = call
+    implicit def passThrough[A <: Handler]: HandlerInvokerFactory[A] = new HandlerInvokerFactory[A] {
+      def createInvoker(fakeCall: => A, handlerDef: HandlerDef) = new HandlerInvoker[A] {
+        def call(call: => A) = call
+      }
     }
 
-    private def loadJavaControllerClass(handlerDef: HandlerDef) = {
-      val classLoader = handlerDef.ref.getClass.getClassLoader
+    private def loadJavaControllerClass(handlerDef: HandlerDef): Class[_] = {
       try {
-        classLoader.loadClass(handlerDef.controller)
+        handlerDef.classLoader.loadClass(handlerDef.controller)
       } catch {
         case e: ClassNotFoundException => {
           // Try looking up relative to the routers package name.
@@ -180,7 +182,7 @@ object Router {
           // they could reference controllers relative to their own package.
           if (handlerDef.routerPackage.length > 0) {
             try {
-              classLoader.loadClass(handlerDef.routerPackage + "." + handlerDef.controller)
+              handlerDef.classLoader.loadClass(handlerDef.routerPackage + "." + handlerDef.controller)
             } catch {
               case NonFatal(_) => throw e
             }
@@ -189,46 +191,51 @@ object Router {
       }
     }
 
-    implicit def wrapJava: HandlerInvoker[JResult] = new HandlerInvoker[JResult] {
-      def call(call: => JResult, handlerDef: HandlerDef) = {
-        new {
-          val annotations = javaActionAnnotations.getOrElseUpdate(handlerDef, {
-            val controller = loadJavaControllerClass(handlerDef)
-            val method = MethodUtils.getMatchingAccessibleMethod(controller, handlerDef.method, handlerDef.parameterTypes: _*)
-            new JavaActionAnnotations(controller, method)
-          })
-        } with play.core.j.JavaAction {
-          val parser = annotations.parser
-          def invocation = JPromise.pure(call)
+    private abstract class JavaActionInvokerFactory[A] extends HandlerInvokerFactory[A] {
+      def createInvoker(fakeCall: => A, handlerDef: HandlerDef): HandlerInvoker[A] = new HandlerInvoker[A] {
+        val cachedHandlerTags = handlerTags(handlerDef)
+        val cachedAnnotations = {
+          val controller = loadJavaControllerClass(handlerDef)
+          val method = MethodUtils.getMatchingAccessibleMethod(controller, handlerDef.method, handlerDef.parameterTypes: _*)
+          new JavaActionAnnotations(controller, method)
         }
+        def call(call: => A): Handler = {
+          new play.core.j.JavaAction with RequestTaggingHandler {
+            val annotations = cachedAnnotations
+            val parser = cachedAnnotations.parser
+            def invocation: JPromise[JResult] = resultCall(call)
+            def tagRequest(rh: RequestHeader) =  taggedRequest(rh, cachedHandlerTags)
+          }
+        }
+      }
+      def resultCall(call: => A): JPromise[JResult]
+    }
+
+    implicit def wrapJava: HandlerInvokerFactory[JResult] = new JavaActionInvokerFactory[JResult] {
+      def resultCall(call: => JResult) = JPromise.pure(call)
+    }
+    implicit def wrapJavaPromise: HandlerInvokerFactory[JPromise[JResult]] = new JavaActionInvokerFactory[JPromise[JResult]] {
+      def resultCall(call: => JPromise[JResult]) = call
+    }
+
+    private abstract class JavaWebSocketInvokerFactory[A] extends HandlerInvokerFactory[play.mvc.WebSocket[A]] {
+      def webSocketCall(call: => play.mvc.WebSocket[A]): WebSocket[A]
+      def createInvoker(fakeCall: => play.mvc.WebSocket[A], handlerDef: HandlerDef): HandlerInvoker[play.mvc.WebSocket[A]] = new HandlerInvoker[play.mvc.WebSocket[A]] {
+        val cachedHandlerTags = handlerTags(handlerDef)
+        def call(call: => play.mvc.WebSocket[A]): play.api.mvc.WebSocket[A] = webSocketCall(call)
       }
     }
 
-    implicit def wrapJavaPromise: HandlerInvoker[JPromise[JResult]] = new HandlerInvoker[JPromise[JResult]] {
-      def call(call: => JPromise[JResult], handlerDef: HandlerDef) = {
-        new {
-          val annotations = javaActionAnnotations.getOrElseUpdate(handlerDef, {
-            val controller = loadJavaControllerClass(handlerDef)
-            val method = MethodUtils.getMatchingAccessibleMethod(controller, handlerDef.method, handlerDef.parameterTypes: _*)
-            new JavaActionAnnotations(controller, method)
-          })
-        } with play.core.j.JavaAction {
-          val parser = annotations.parser
-          def invocation = call
-        }
-      }
+    implicit def javaBytesWebSocket: HandlerInvokerFactory[play.mvc.WebSocket[Array[Byte]]] = new JavaWebSocketInvokerFactory[Array[Byte]] {
+      def webSocketCall(call: => play.mvc.WebSocket[Array[Byte]]) = play.core.j.JavaWebSocket.ofBytes(call)
     }
 
-    implicit def javaBytesWebSocket: HandlerInvoker[play.mvc.WebSocket[Array[Byte]]] = new HandlerInvoker[play.mvc.WebSocket[Array[Byte]]] {
-      def call(call: => play.mvc.WebSocket[Array[Byte]], handler: HandlerDef): Handler = play.core.j.JavaWebSocket.ofBytes(call)
+    implicit def javaStringWebSocket: HandlerInvokerFactory[play.mvc.WebSocket[String]] = new JavaWebSocketInvokerFactory[String] {
+      def webSocketCall(call: => play.mvc.WebSocket[String]) = play.core.j.JavaWebSocket.ofString(call)
     }
 
-    implicit def javaStringWebSocket: HandlerInvoker[play.mvc.WebSocket[String]] = new HandlerInvoker[play.mvc.WebSocket[String]] {
-      def call(call: => play.mvc.WebSocket[String], handler: HandlerDef): Handler = play.core.j.JavaWebSocket.ofString(call)
-    }
-
-    implicit def javaJsonWebSocket: HandlerInvoker[play.mvc.WebSocket[com.fasterxml.jackson.databind.JsonNode]] = new HandlerInvoker[play.mvc.WebSocket[com.fasterxml.jackson.databind.JsonNode]] {
-      def call(call: => play.mvc.WebSocket[com.fasterxml.jackson.databind.JsonNode], handler: HandlerDef): Handler = play.core.j.JavaWebSocket.ofJson(call)
+    implicit def javaJsonWebSocket: HandlerInvokerFactory[play.mvc.WebSocket[com.fasterxml.jackson.databind.JsonNode]] = new JavaWebSocketInvokerFactory[com.fasterxml.jackson.databind.JsonNode] {
+      def webSocketCall(call: => play.mvc.WebSocket[com.fasterxml.jackson.databind.JsonNode]) = play.core.j.JavaWebSocket.ofJson(call)
     }
 
   }
@@ -382,31 +389,38 @@ object Router {
       routes.lift(request)
     }
 
-    private def doTagRequest(rh: RequestHeader, handler: HandlerDef): RequestHeader = rh.copy(tags = rh.tags ++ Map(
-      play.api.Routes.ROUTE_PATTERN -> handler.path,
-      play.api.Routes.ROUTE_VERB -> handler.verb,
-      play.api.Routes.ROUTE_CONTROLLER -> handler.controller,
-      play.api.Routes.ROUTE_ACTION_METHOD -> handler.method,
-      play.api.Routes.ROUTE_COMMENTS -> handler.comments
-    ))
-
-    def invokeHandler[T](call: => T, handler: HandlerDef)(implicit d: HandlerInvoker[T]): Handler = {
-      d.call(call, handler) match {
-        case javaAction: play.core.j.JavaAction => new play.core.j.JavaAction with RequestTaggingHandler {
-          def invocation = javaAction.invocation
-          val annotations = javaAction.annotations
-          val parser = javaAction.annotations.parser
-          def tagRequest(rh: RequestHeader) = doTagRequest(rh, handler)
+    private class TaggingInvoker[A](underlyingInvoker: HandlerInvoker[A], handlerDef: HandlerDef) extends HandlerInvoker[A] {
+      val cachedHandlerTags = handlerTags(handlerDef)
+      def call(call: => A): Handler = {
+        val handler = underlyingInvoker.call(call)
+        handler match {
+          case alreadyTagged: RequestTaggingHandler => alreadyTagged
+          case javaAction: play.core.j.JavaAction =>
+            new play.core.j.JavaAction with RequestTaggingHandler {
+              def invocation = javaAction.invocation
+              val annotations = javaAction.annotations
+              val parser = javaAction.annotations.parser
+              def tagRequest(rh: RequestHeader) = taggedRequest(rh, cachedHandlerTags)
+            }
+          case action: EssentialAction => new EssentialAction with RequestTaggingHandler {
+            def apply(rh: RequestHeader) = action(rh)
+            def tagRequest(rh: RequestHeader) = taggedRequest(rh, cachedHandlerTags)
+          }
+          case ws @ WebSocket(f) => {
+            WebSocket[ws.FRAMES_TYPE](rh => ws.f(taggedRequest(rh, cachedHandlerTags)))(ws.frameFormatter)
+          }
+          case handler => handler
         }
-        case action: EssentialAction => new EssentialAction with RequestTaggingHandler {
-          def apply(rh: RequestHeader) = action(rh)
-          def tagRequest(rh: RequestHeader) = doTagRequest(rh, handler)
-        }
-        case ws @ WebSocket(f) => {
-          WebSocket[ws.FRAMES_TYPE](rh => f(doTagRequest(rh, handler)))(ws.frameFormatter)
-        }
-        case handler => handler
       }
+    }
+
+    def fakeValue[A]: A = throw new UnsupportedOperationException("Can't get a fake value")
+
+    def createInvoker[T](
+        fakeCall: => T,
+        handlerDef: HandlerDef)(implicit hif: HandlerInvokerFactory[T]): HandlerInvoker[T] = {
+      val underlyingInvoker = hif.createInvoker(fakeCall, handlerDef)
+      new TaggingInvoker(underlyingInvoker, handlerDef)
     }
 
   }

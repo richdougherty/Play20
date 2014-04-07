@@ -5,6 +5,7 @@ package play.api.mvc
 
 import play.api.libs.iteratee._
 import play.api._
+import play.core.Router.{HandlerInvoker, HandlerInvokerFactory}
 import scala.concurrent._
 import scala.language.higherKinds
 
@@ -21,15 +22,17 @@ trait RequestTaggingHandler extends Handler {
 }
 
 /**
- * Reference to an Handler.
+ * Reference to a Handler.
  */
-class HandlerRef[T](callValue: => T, handlerDef: play.core.Router.HandlerDef)(implicit handlerInvoker: play.core.Router.HandlerInvoker[T]) extends play.mvc.HandlerRef {
+class HandlerRef[T](call: => T, handlerDef: play.core.Router.HandlerDef)(implicit hif: play.core.Router.HandlerInvokerFactory[T]) extends play.mvc.HandlerRef {
+
+  lazy val invoker: HandlerInvoker[T] = hif.createInvoker(call, handlerDef)
 
   /**
    * Retrieve a real handler behind this ref.
    */
   def handler: play.api.mvc.Handler = {
-    handlerInvoker.call(callValue, handlerDef)
+    invoker.call(call)
   }
 
   /**
