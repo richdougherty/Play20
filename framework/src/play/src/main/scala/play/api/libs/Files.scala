@@ -3,10 +3,8 @@
  */
 package play.api.libs
 
-import scalax.io._
-import scalax.file._
-
 import java.io._
+import play.utils.PlayIO
 
 /**
  * FileSystem utilities.
@@ -68,15 +66,15 @@ object Files {
   /**
    * Copy a file.
    */
-  def copyFile(from: File, to: File, copyAttributes: Boolean = true, replaceExisting: Boolean = true): Path = {
-    Path(from).copyTo(target = Path(to), copyAttributes = copyAttributes, replaceExisting = replaceExisting)
+  def copyFile(from: File, to: File, replaceExisting: Boolean = true): File = {
+    PlayIO.copyFile(from, to, replaceExisting)
   }
 
   /**
    * Rename a file.
    */
-  def moveFile(from: File, to: File, replace: Boolean = true, atomicMove: Boolean = true): Path = {
-    Path(from).moveTo(target = Path(to), replace = replace, atomicMove = atomicMove)
+  def moveFile(from: File, to: File, replace: Boolean = true): File = {
+    PlayIO.moveFile(from, to, replace)
   }
 
   /**
@@ -85,7 +83,7 @@ object Files {
    * @param path the file to read.
    * @return the file contents
    */
-  def readFile(path: File): String = Path(path).string
+  def readFile(path: File): String = PlayIO.readFileAsString(path)
 
   /**
    * Write a file’s contents as a `String`.
@@ -93,14 +91,17 @@ object Files {
    * @param path the file to write to
    * @param content the contents to write
    */
-  def writeFile(path: File, content: String): Unit = Path(path).write(content)
+  def writeFile(path: File, content: String): Unit = PlayIO.writeStringToFile(path, content)
 
   /**
    * Creates a directory.
    *
    * @param path the directory to create
    */
-  def createDirectory(path: File): Path = Path(path).createDirectory(failIfExists = false)
+  def createDirectory(path: File): File = {
+    path.mkdirs()
+    path
+  }
 
   /**
    * Writes a file’s content as String, only touching the file if the actual file content is different.
