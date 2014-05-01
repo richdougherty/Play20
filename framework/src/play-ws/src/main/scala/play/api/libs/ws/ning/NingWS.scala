@@ -3,7 +3,8 @@
  */
 package play.api.libs.ws.ning
 
-import com.ning.http.client.{ Response => AHCResponse, ProxyServer => AHCProxyServer, _ }
+import com.ning.http.client.{ AsyncHandler, Response => AHCResponse, ProxyServer => AHCProxyServer, _ }
+import com.ning.http.client.AsyncHandler.STATE
 import com.ning.http.client.cookie.{ Cookie => AHCCookie }
 import com.ning.http.client.Realm.{ RealmBuilder, AuthScheme }
 import com.ning.http.util.AsyncHttpProviderUtils
@@ -18,6 +19,7 @@ import play.api.libs.ws._
 import play.api.libs.ws.ssl._
 
 import play.api.libs.iteratee._
+import play.api.libs.iteratee.Concurrent.Channel
 import play.api.{ Mode, Application, Play }
 import play.core.utils.CaseInsensitiveOrdered
 import play.api.libs.ws.DefaultWSResponseHeaders
@@ -270,100 +272,119 @@ case class NingWSRequest(client: NingWSClient,
   }
 
   private[libs] def executeStream(): Future[(WSResponseHeaders, Enumerator[Array[Byte]])] = {
-    import com.ning.http.client.AsyncHandler
+
     import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
-    val result = Promise[(WSResponseHeaders, Enumerator[Array[Byte]])]()
+    type ResultPromise = Promise[(WSResponseHeaders, Enumerator[Array[Byte]])]
 
-    val errorInStream = Promise[Unit]()
+    // Use a few classes to track the state of the stream handling
+    sealed trait State
+    final case class Initial(result: ResultPromise) extends State
+    final case class GotStatus(result: ResultPromise, status: HttpResponseStatus) extends State
+    final class Enumerating(channelPromise: Promise[Channel[Array[Byte]]]) extends State {
+      val sequentialRunner = new SequentialRunner()
+      def withChannel(f: Channel[Array[Byte]] => Unit) = {
+        // Run with a SequentialRunner so that operations run in order.
+        // Each operation is only considered complete once the Future
+        // it returns is complete (in this case a Future mapped from
+        // the channelPromise). So no operations will complete until
+        // the channel is available. This means our operations buffer
+        // until the channelPromise is completed, and then they all
+        // proceed once it becomes available.
+        sequentialRunner.run {
+          // channelPromise will be completed when the enumerator
+          // is bound to the iteratee. Once we have a channel, apply
+          // f to it. f will perform a push() or end() operation.
+          // The future returned by the `map` operation indicates
+          // that the operation is complete.
+          channelPromise.future.map(f(_))
+        }
+      }
+    }
+    final case object DoneOrError extends State
 
-    calculator.map(_.sign(this))
+    val initial = Initial(Promise[(WSResponseHeaders, Enumerator[Array[Byte]])]())
 
-    val promisedIteratee = Promise[Iteratee[Array[Byte], Unit]]()
-
-    @volatile var doneOrError = false
-    @volatile var statusCode = 0
-    @volatile var current: Iteratee[Array[Byte], Unit] = Iteratee.flatten(promisedIteratee.future)
+    @volatile var state: State = initial
 
     client.executeRequest(builder.build(), new AsyncHandler[Unit]() {
 
-      import com.ning.http.client.AsyncHandler.STATE
-
-      override def onStatusReceived(status: HttpResponseStatus) = {
-        statusCode = status.getStatusCode
-        STATE.CONTINUE
-      }
-
-      override def onHeadersReceived(h: HttpResponseHeaders) = {
-        val headers = h.getHeaders
-
-        val responseHeader = DefaultWSResponseHeaders(statusCode, ningHeadersToMap(headers))
-        val enumerator = new Enumerator[Array[Byte]]() {
-          def apply[A](i: Iteratee[Array[Byte], A]) = {
-
-            val doneIteratee = Promise[Iteratee[Array[Byte], A]]()
-
-            // Map it so that we can complete the iteratee when it returns
-            val mapped = i.map { a =>
-              doneIteratee.trySuccess(Done(a))
-              ()
-            }.recover {
-              // but if an error happens, we want to propogate that
-              case e =>
-                doneIteratee.tryFailure(e)
-                throw e
-            }
-
-            // Redeem the iteratee that we promised to the AsyncHandler
-            promisedIteratee.trySuccess(mapped)
-
-            // If there's an error in the stream from upstream, then fail this returned future with that
-            errorInStream.future.onFailure {
-              case e => doneIteratee.tryFailure(e)
-            }
-
-            doneIteratee.future
-          }
-        }
-
-        result.trySuccess((responseHeader, enumerator))
-        STATE.CONTINUE
-      }
-
-      override def onBodyPartReceived(bodyPart: HttpResponseBodyPart) = {
-        if (!doneOrError) {
-          current = current.pureFlatFold {
-            case Step.Done(a, e) =>
-              doneOrError = true
-              Done(a, e)
-
-            case Step.Cont(k) =>
-              k(El(bodyPart.getBodyPartBytes))
-
-            case Step.Error(e, input) =>
-              doneOrError = true
-              Error(e, input)
-
-          }
+      override def onStatusReceived(status: HttpResponseStatus) = state match {
+        case Initial(result) =>
+          state = GotStatus(result, status)
           STATE.CONTINUE
-        } else {
-          current = null
-          // Must close underlying connection, otherwise async http client will drain the stream
-          bodyPart.markUnderlyingConnectionAsClosed()
-          STATE.ABORT
-        }
+        case _ =>
+          illegalState
       }
 
-      override def onCompleted() = {
-        Option(current).foreach(_.run)
+      override def onHeadersReceived(h: HttpResponseHeaders) = state match {
+        case GotStatus(result, status) =>
+          val headers = h.getHeaders
+          val responseHeader = DefaultWSResponseHeaders(status.getStatusCode, ningHeadersToMap(headers))
+          // Create an Enumerator and a Promise for the Enumerator's channel.
+          // The Promise will be completed once the Enumerator is bound.
+          val channelPromise = Promise[Channel[Array[Byte]]]()
+          val enumerator = Concurrent.unicast[Array[Byte]](channelPromise.success(_))
+          result.success((responseHeader, enumerator))
+          state = new Enumerating(channelPromise)
+          STATE.CONTINUE
+        case e: Enumerating =>
+          // Despite what the docs say, headers sometimes come after body
+          // parts. We ignore these. If an error has occurred then
+          // we can expect onThrowable to be called eventually.
+          STATE.CONTINUE
+        case _ =>
+          illegalState
+      }
+
+      override def onBodyPartReceived(bodyPart: HttpResponseBodyPart) = state match {
+        case e: Enumerating =>
+          e.withChannel(_.push(El(bodyPart.getBodyPartBytes)))
+          STATE.CONTINUE
+        case _ =>
+          bodyPart.markUnderlyingConnectionAsClosed()
+          illegalState
+      }
+
+      override def onCompleted() = state match {
+        case e: Enumerating =>
+          e.withChannel(_.end())
+          state = DoneOrError
+        case DoneOrError =>
+          ()
+        case _ =>
+          illegalState
       }
 
       override def onThrowable(t: Throwable) = {
-        result.tryFailure(t)
-        errorInStream.tryFailure(t)
+        fail(t)
       }
+
+      // Fail with an IllegalStateException
+      private def illegalState: STATE = fail(new IllegalStateException(s"Unexpected WS event: ${state.getClass}"))
+
+      // Fail in a way appropriate to the current state
+      private def fail(t: Throwable): STATE = {
+        state match {
+          case Initial(result) =>
+            result.failure(t)
+          case GotStatus(result, _) =>
+            result.failure(t)
+          case e: Enumerating =>
+            e.withChannel(_.end(t))
+          case DoneOrError =>
+            // Both the iteratee and result promise are complete
+            // so there's no way for us to report this error other
+            // than throwing the exception.
+            throw t
+        }
+        state = DoneOrError
+        STATE.ABORT
+      }
+
     })
-    result.future
+
+    initial.result.future
   }
 
 }
