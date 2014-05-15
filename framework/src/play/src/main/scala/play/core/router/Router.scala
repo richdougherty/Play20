@@ -3,6 +3,7 @@
  */
 package play.core
 
+import play.api.Application
 import play.api.mvc._
 import org.apache.commons.lang3.reflect.MethodUtils
 
@@ -301,6 +302,43 @@ object Router {
     implicit def javaJsonPromiseWebSocket: HandlerInvokerFactory[JPromise[JWebSocket[JsonNode]]] = new JavaWebSocketInvokerFactory[JPromise[JWebSocket[JsonNode]], JsonNode] {
       def webSocketCall(call: => JPromise[JWebSocket[JsonNode]]) = JavaWebSocket.promiseOfJson(call)
     }
+  }
+
+  case class RoutesContext(application: Application, prefix: String)
+
+  object Routes {
+
+    private[play] def load(classLoader: ClassLoader, routerName: String, routesContext: RoutesContext): Either[String,Option[Routes]] = {
+
+      def loadClass(name: String): Option[Class[_]] = {
+        try Some(classLoader.loadClass(name)) catch {
+          case _: ClassNotFoundException => None
+        }
+      }
+
+      {
+        // First try instantiating the Routes object
+        loadClass(routerName).map { clazz =>
+          try {
+            val ctor = clazz.getConstructor(classOf[RoutesContext])
+            val instance = ctor.newInstance(routesContext).asInstanceOf[Routes]
+            Right(Some(instance))
+          } catch {
+            case _: NoSuchMethodException => Left(s"Router was missing a RoutesContext constructor: $routerName")
+          }
+        }
+      } orElse {
+        // Then look for a singleton Routes object
+        loadClass(routerName+"$").map { clazz =>
+          val field = clazz.getDeclaredField("MODULE$")
+          val instance = field.get(null).asInstanceOf[Routes]
+          instance.setPrefix(routesContext.prefix)
+          Right(Some(instance))
+        }
+      } getOrElse(Right(None))
+
+    }
+
   }
 
   /**

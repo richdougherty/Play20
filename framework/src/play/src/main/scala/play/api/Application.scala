@@ -244,19 +244,25 @@ trait Application {
    */
   lazy val routes: Option[Router.Routes] = loadRoutes
 
-  protected def loadRoutes: Option[Router.Routes] = try {
-    Some(classloader.loadClass(configuration.getString("application.router").map(_ + "$").getOrElse("Routes$")).getDeclaredField("MODULE$").get(null).asInstanceOf[Router.Routes]).map { router =>
-      router.setPrefix(configuration.getString("application.context").map { prefix =>
-        if (!prefix.startsWith("/")) {
-          throw configuration.reportError("application.context", "Invalid application context")
-        }
-        prefix
-      }.getOrElse("/"))
-      router
+  protected def loadRoutes: Option[Router.Routes] = {
+    import Router._
+
+    val optionalRouterName = configuration.getString("application.router")
+    val routerNameToTry = optionalRouterName.getOrElse("Routes")
+
+    val prefix = configuration.getString("application.context").getOrElse("/")
+    if (!prefix.startsWith("/")) {
+      throw configuration.reportError("application.context", "Invalid application context")
     }
-  } catch {
-    case e: ClassNotFoundException => configuration.getString("application.router").map { routerName =>
-      throw configuration.reportError("application.router", "Router not found: " + routerName)
+
+    val routerContext = RoutesContext(this, prefix)
+
+    Routes.load(classloader, routerNameToTry, routerContext) match {
+      case Left(error) => throw configuration.reportError("application.router", error)
+      case Right(s@Some(routes)) => s
+      case Right(None) => optionalRouterName.map { routerName =>
+        throw configuration.reportError("application.router", s"Router not found: $routerName")
+      }
     }
   }
 
