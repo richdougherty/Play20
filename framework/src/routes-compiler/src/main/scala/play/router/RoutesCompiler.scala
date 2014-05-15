@@ -446,22 +446,13 @@ object RoutesCompiler {
         |
         |import Router.queryString
         |
-        |object Routes extends Router.Routes {
+        |class Routes(routerContext: RouterContext) extends Router.Routes {
         |
         |import ReverseRouteContext.empty
         |
-        |private var _prefix = "/"
+        |def setPrefix(prefix: String) = throw new UnsupportedOperationException("This routes class has an immutable prefix")
         |
-        |def setPrefix(prefix: String) {
-        |  _prefix = prefix
-        |  List[(String,Routes)](%s).foreach {
-        |    case (p, router) => router.setPrefix(prefix + (if(prefix.endsWith("/")) "" else "/") + p)
-        |  }
-        |}
-        |
-        |def prefix = _prefix
-        |
-        |lazy val defaultPrefix = { if(Routes.prefix.endsWith("/")) "" else "/" }
+        |def prefix = routerContext.prefix
         |
         |%s
         |
