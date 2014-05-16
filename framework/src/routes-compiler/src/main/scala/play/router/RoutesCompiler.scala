@@ -46,7 +46,7 @@ object RoutesCompiler {
   sealed trait Rule extends Positional
 
   case class Route(verb: HttpVerb, path: PathPattern, call: HandlerCall, comments: List[Comment] = List()) extends Rule
-  case class Include(prefix: String, router: String) extends Rule
+  case class Include(prefix: String, router: String, constructed: Boolean) extends Rule
 
   case class Comment(comment: String)
 
@@ -225,8 +225,8 @@ object RoutesCompiler {
       case v ~ _ ~ p ~ _ ~ c ~ _ => Route(v, p, c)
     }
 
-    def include = "->" ~! separator ~ path ~ separator ~ router ~ ignoreWhiteSpace ^^ {
-      case _ ~ _ ~ p ~ _ ~ r ~ _ => Include(p.toString, r)
+    def include = "->" ~! separator ~ path ~ separator ~ opt("^") ~ router ~ ignoreWhiteSpace ^^ {
+      case _ ~ _ ~ p ~ _ ~ constructed ~ r ~ _ => Include(p.toString, r, constructed.isDefined)
     }
 
     def sentence: Parser[Product with Serializable] = namedError((comment | positioned(include) | positioned(route)), "HTTP Verb (GET, POST, ...), include (->) or comment (#) expected") <~ (newLine | EOF)
@@ -235,13 +235,13 @@ object RoutesCompiler {
       case routes =>
         routes.reverse.foldLeft(List[(Option[Rule], List[Comment])]()) {
           case (s, r @ Route(_, _, _, _)) => (Some(r), List()) :: s
-          case (s, i @ Include(_, _)) => (Some(i), List()) :: s
+          case (s, i @ Include(_, _, _)) => (Some(i), List()) :: s
           case (s, c @ ()) => (None, List()) :: s
           case ((r, comments) :: others, c @ Comment(_)) => (r, c :: comments) :: others
           case (s, _) => s
         }.collect {
           case (Some(r @ Route(_, _, _, _)), comments) => r.copy(comments = comments).setPos(r.pos)
-          case (Some(i @ Include(_, _)), _) => i
+          case (Some(i @ Include(_, _, _)), _) => i
         }
     }
 
@@ -450,13 +450,14 @@ object RoutesCompiler {
         |
         |import ReverseRouteContext.empty
         |
-        |def setPrefix(prefix: String) = throw new UnsupportedOperationException("This routes class has an immutable prefix")
+        |override def setPrefix(prefix: String) = throw new UnsupportedOperationException("These routes have an immutable prefix")
+        |override def prefix = routerContext.prefix
         |
-        |def prefix = routerContext.prefix
-        |
+        |// Route definitions
         |%s
         |
-        |def routes:PartialFunction[RequestHeader,Handler] = {
+        |// Route handling
+        |override def routes:PartialFunction[RequestHeader,Handler] = {
         |%s
         |}
         |
@@ -467,7 +468,6 @@ object RoutesCompiler {
       date,
       namespace.map("package " + _).getOrElse(""),
       additionalImports.map(prefixImport).map("import " + _).mkString("\n"),
-      rules.collect { case Include(p, r) => "(\"" + p + "\"," + r + ")" }.mkString(","),
       routeDefinitions(namespace.getOrElse(""), rules),
       routing(namespace.getOrElse(""), rules)
     )
@@ -767,7 +767,7 @@ object RoutesCompiler {
                     val reverseSignature = parameters.map(p => safeKeyword(p.name) + ":" + p.typeName).mkString(", ")
 
                     val controllerCall = if (route.call.instantiate) {
-                      "play.api.Play.maybeApplication.map(_.global).getOrElse(play.api.DefaultGlobal).getControllerInstance(classOf[" + packageName + "." + controller + "])." + route.call.method + "(" + { parameters.map(x => safeKeyword(x.name)).mkString(", ") } + ")"
+                      "routerContext.application.global.getControllerInstance(classOf[" + packageName + "." + controller + "])." + route.call.method + "(" + { parameters.map(x => safeKeyword(x.name)).mkString(", ") } + ")"
                     } else {
                       packageName + "." + controller + "." + route.call.method + "(" + { parameters.map(x => safeKeyword(x.name)).mkString(", ") } + ")"
                     }
@@ -993,9 +993,11 @@ object RoutesCompiler {
   private def baseIdent(r: Route, i: Int): String = r.call.packageName.replace(".", "_") + "_" + r.call.controller.replace(".", "_") + "_" + r.call.method + i
   private def routeIdent(r: Route, i: Int): String = baseIdent(r, i) + "_route"
   private def invokerIdent(r: Route, i: Int): String = baseIdent(r, i) + "_invoker"
+  private def includeIdent(r: Include, i: Int): String = r.router.replace(".", "_") + i + "_include"
+
   private def controllerMethodCall(r: Route, paramFormat: Parameter => String): String = {
     val methodPart = if (r.call.instantiate) {
-      "play.api.Play.maybeApplication.map(_.global).getOrElse(play.api.DefaultGlobal).getControllerInstance(classOf[" + r.call.packageName + "." + r.call.controller + "])." + r.call.method
+      "routerContext.application.global.getControllerInstance(classOf[" + r.call.packageName + "." + r.call.controller + "])." + r.call.method
     } else {
       r.call.packageName + "." + r.call.controller + "." + r.call.method
     }
@@ -1010,7 +1012,7 @@ object RoutesCompiler {
    */
   def routeDefinitions(routerPackage: String, rules: List[Rule]): String = {
     rules.zipWithIndex.map {
-      case (r @ Route(_, _, _, _), i) =>
+      case (r: Route, i) =>
         val pattern = "PathPattern(List(StaticPart(Routes.prefix)" + { if (r.path.parts.isEmpty) "" else """,StaticPart(Routes.defaultPrefix),""" } + r.path.parts.map(_.toString).mkString(",") + "))"
         val fakeCall = controllerMethodCall(r, p => s"fakeValue[${p.typeName}]")
         val handlerDef = """HandlerDef(this.getClass.getClassLoader, """" + routerPackage + """", """" + r.call.packageName + "." + r.call.controller + """", """" + r.call.method + """", """ + r.call.parameters.filterNot(_.isEmpty).map { params =>
@@ -1023,16 +1025,16 @@ object RoutesCompiler {
            |${fakeCall},
            |${handlerDef})
         """.stripMargin
-      case (r @ Include(_, _), i) =>
-        """
-          |%s
-          |lazy val %s%s = Include(%s)
-        """.stripMargin.format(
-          markLines(r),
-          r.router.replace(".", "_"),
-          i,
-          r.router
-        )
+      case (r: Include, i) =>
+        val routerExpression = if (r.constructed) s"new ${r.router}(routerContext)" else s"${r.router}"
+        s"""
+          |${markLines(r)}
+          |private val ${includeIdent(r, i)} = {
+          |  val p = prefix + (if(prefix.endsWith("/")) "" else "/") + "${r.prefix}")
+          |  val rc = RouterContext(routerContext.application, p)
+          |  val router = ${routerExpression}
+          |  Include(router)
+          |}""".stripMargin
     }.mkString("\n") +
       """|
          |def documentation = List(%s).foldLeft(List.empty[(String,String,String)]) { (s,e) => e.asInstanceOf[Any] match {
@@ -1043,7 +1045,7 @@ object RoutesCompiler {
         rules.map {
           case Route(verb, path, call, _) if path.parts.isEmpty => "(\"\"\"" + verb + "\"\"\", prefix,\"\"\"" + call + "\"\"\")"
           case Route(verb, path, call, _) => "(\"\"\"" + verb + "\"\"\", prefix + (if(prefix.endsWith(\"/\")) \"\" else \"/\") + \"\"\"" + path + "\"\"\",\"\"\"" + call + "\"\"\")"
-          case Include(prefix, router) => router + ".documentation"
+          case Include(prefix, router, constructed) => router + ".documentation"
         }.mkString(","))
   }
 
@@ -1059,16 +1061,12 @@ object RoutesCompiler {
    */
   def routing(routerPackage: String, routes: List[Rule]): String = {
     Option(routes.zipWithIndex.map {
-      case (r @ Include(_, _), i) =>
-        """
-            |%s
-            |case %s%s(handler) => handler
-        """.stripMargin.format(
-          markLines(r),
-          r.router.replace(".", "_"),
-          i
-        )
-      case (r @ Route(_, _, _, _), i) =>
+      case (r: Include, i) =>
+        s"""
+            |${markLines(r)}
+            |case ${includeIdent(r, i)}(handler) => handler
+        """.stripMargin
+      case (r: Route, i) =>
         val binding = r.call.parameters.filterNot(_.isEmpty).map { params =>
           params.map { p =>
             p.fixed.map { v =>

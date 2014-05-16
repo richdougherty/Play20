@@ -107,11 +107,20 @@ object RoutesCompilerSpec extends Specification {
       parseRoute("GET /s @p.c.m").call.instantiate must_== true
     }
 
-    "parse an include" in {
+    "parse an include of a singleton router" in {
       val rule = parseRule("-> /s someFile")
       rule must beAnInstanceOf[Include]
       rule.asInstanceOf[Include].router must_== "someFile"
       rule.asInstanceOf[Include].prefix must_== "s"
+      rule.asInstanceOf[Include].constructed must_== false
+    }
+
+    "parse an include of a constructed router" in {
+      val rule = parseRule("-> /s ^someFile")
+      rule must beAnInstanceOf[Include]
+      rule.asInstanceOf[Include].router must_== "someFile"
+      rule.asInstanceOf[Include].prefix must_== "s"
+      rule.asInstanceOf[Include].constructed must_== true
     }
 
     "parse a comment with a route" in {
