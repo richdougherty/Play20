@@ -3,7 +3,7 @@
  */
 package play.core
 
-import play.api.Application
+import play.api.{ Application, Play }
 import play.api.mvc._
 import org.apache.commons.lang3.reflect.MethodUtils
 
@@ -338,6 +338,17 @@ object Router {
       } getOrElse(Right(None))
 
     }
+
+    def currentAppReverseRoutesPrefix(routerName: String) = {
+      val app: Application = Play.maybeApplication.getOrElse {
+        throw new IllegalStateException("An application must be running to look up its reverse routes")
+      }
+      val prefix: String = app.getReverseRoutesPrefix(routerName).getOrElse {
+        throw new IllegalStateException("No reverse routing prefix registered for router: $routerName")
+      }
+      prefix
+    }
+
 
   }
 

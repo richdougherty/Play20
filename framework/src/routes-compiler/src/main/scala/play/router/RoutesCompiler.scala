@@ -450,8 +450,9 @@ object RoutesCompiler {
         |
         |import ReverseRouteContext.empty
         |
-        |override def setPrefix(prefix: String) = throw new UnsupportedOperationException("These routes have an immutable prefix")
-        |override def prefix = routerContext.prefix
+        |override def setPrefix(prefix: String): String = throw new UnsupportedOperationException("These routes have an immutable prefix")
+        |override def prefix: String = routerContext.prefix
+        |routerContext.application.setReverseRoutesPrefix("%s", routerContext.prefix)
         |
         |// Route definitions
         |%s
@@ -468,16 +469,18 @@ object RoutesCompiler {
       date,
       namespace.map("package " + _).getOrElse(""),
       additionalImports.map(prefixImport).map("import " + _).mkString("\n"),
+      namespace.map(_ + ".").getOrElse("") + "Router",
       routeDefinitions(namespace.getOrElse(""), rules),
       routing(namespace.getOrElse(""), rules)
     )
 
-  def generateReverseRouter(path: String, hash: String, date: String, namespace: Option[String], additionalImports: Seq[String], routes: List[Route], reverseRefRouter: Boolean, namespaceReverseRouter: Boolean) =
+  def generateReverseRouter(path: String, hash: String, date: String, namespace: Option[String], additionalImports: Seq[String], routes: List[Route], reverseRefRouter: Boolean, namespaceReverseRouter: Boolean) = {
+    val routerName = namespace.map(_+".") + "Routes"
     """ |// @SOURCE:%s
         |// @HASH:%s
         |// @DATE:%s
         |
-        |import %sRoutes.{prefix => _prefix, defaultPrefix => _defaultPrefix}
+        |import %s.{prefix => _prefix, defaultPrefix => _defaultPrefix}
         |import play.core._
         |import play.core.Router._
         |import play.core.Router.HandlerInvokerFactory._
@@ -497,12 +500,13 @@ object RoutesCompiler {
       path,
       hash,
       date,
-      namespace.map(_ + ".").getOrElse(""),
+      routerName,
       additionalImports.map(prefixImport).map("import " + _).mkString("\n"),
-      reverseRouting(routes, namespace.filter(_ => namespaceReverseRouter)),
-      javaScriptReverseRouting(routes, namespace.filter(_ => namespaceReverseRouter)),
-      if (reverseRefRouter) refReverseRouting(routes, namespace.filter(_ => namespaceReverseRouter)) else ""
+      reverseRouting(routerName, routes, namespace.filter(_ => namespaceReverseRouter)),
+      javaScriptReverseRouting(routerName, routes, namespace.filter(_ => namespaceReverseRouter)),
+      if (reverseRefRouter) refReverseRouting(routerName, routes, namespace.filter(_ => namespaceReverseRouter)) else ""
     )
+  }
 
   def generateJavaWrappers(path: String, hash: String, date: String, rules: List[Rule], reverseRefRouter: Boolean, namespace: Option[String]) = {
     rules.collect { case r: Route => r }.groupBy(_.call.packageName).map {
@@ -562,7 +566,7 @@ object RoutesCompiler {
   /**
    * Generate the reverse routing operations
    */
-  def javaScriptReverseRouting(routes: List[Route], namespace: Option[String]): String = {
+  def javaScriptReverseRouting(routerName: String, routes: List[Route], namespace: Option[String]): String = {
 
     routes.groupBy(_.call.packageName).map {
       case (packageName, routes) => {
@@ -583,14 +587,20 @@ object RoutesCompiler {
                   |%s
                   |class Reverse%s {
                   |    
+                  |
+                  |private def _prefix(needsTrailingSlash: Boolean): String = {
+                  |  val prefix = play.core.Router.Routes.currentAppReverseRoutesPrefix("%s")
+                  |  if (!needsTrailingSlash || prefix.endsWith("/")) prefix else prefix+"/"
+                  |}
+                  |
                   |%s
                   |    
                   |}
               """.stripMargin.format(
                 markLines(routes: _*),
-
                 // alias
                 controller.replace(".", "_"),
+                routerName,
 
                 // reverse method
                 routes.groupBy(r => r.call.method -> r.call.parameters.getOrElse(Nil).map(p => p.typeName)).map {
@@ -609,7 +619,7 @@ object RoutesCompiler {
 
                     def genCall(route: Route, localNames: Map[String, String] = Map()) = "      return _wA({method:\"%s\", url:%s%s})".format(
                       route.verb.value,
-                      "\"\"\"\" + _prefix + " + { if (route.path.parts.isEmpty) "" else "{ _defaultPrefix } + " } + "\"\"\"\"" + route.path.parts.map {
+                      "\"\"\"\" + _prefix(" + (!route.path.parts.isEmpty).toString + ") + \"\"\"\"" + route.path.parts.map {
                         case StaticPart(part) => " + \"" + part + "\""
                         case DynamicPart(name, _, encode) => {
                           route.call.parameters.getOrElse(Nil).find(_.name == name).map { param =>
@@ -723,7 +733,7 @@ object RoutesCompiler {
   /**
    * Generate the routing refs
    */
-  def refReverseRouting(routes: List[Route], namespace: Option[String]): String = {
+  def refReverseRouting(routerName: String, routes: List[Route], namespace: Option[String]): String = {
 
     routes.groupBy(_.call.packageName).map {
       case (packageName, routes) => {
@@ -745,6 +755,9 @@ object RoutesCompiler {
                               |%s
                               |class Reverse%s {
                               |    
+                              |
+                              |private def _prefix: String = play.core.Router.Routes.currentAppReverseRoutesPrefix("%s")
+                              |
                               |%s
                               |    
                               |}
@@ -753,6 +766,8 @@ object RoutesCompiler {
 
                 // alias
                 controller.replace(".", "_"),
+
+                routerName,
 
                 // reverse method
                 routes.groupBy(r => (r.call.method, r.call.parameters.getOrElse(Nil).map(p => p.typeName))).map {
@@ -802,7 +817,7 @@ object RoutesCompiler {
   /**
    * Generate the reverse routing operations
    */
-  def reverseRouting(routes: List[Route], namespace: Option[String]): String = {
+  def reverseRouting(routerName: String, routes: List[Route], namespace: Option[String]): String = {
 
     routes.groupBy(_.call.packageName).map {
       case (packageName, routes) => {
@@ -822,6 +837,11 @@ object RoutesCompiler {
                               |%s
                               |class Reverse%s {
                               |    
+                              |private def _prefix(needsTrailingSlash: Boolean): String = {
+                              |  val prefix = play.core.Router.Routes.currentAppReverseRoutesPrefix("%s")
+                              |  if (!needsTrailingSlash || prefix.endsWith("/")) prefix else prefix+"/"
+                              |}
+                              |
                               |%s
                               |    
                               |}
@@ -830,6 +850,8 @@ object RoutesCompiler {
 
                 // alias
                 controller.replace(".", "_"),
+
+                routerName,
 
                 // reverse method
                 routes.groupBy(r => (r.call.method, r.call.parameters.getOrElse(Nil).map(p => p.typeName))).map {
@@ -866,7 +888,7 @@ object RoutesCompiler {
 
                     def genCall(route: Route, localNames: Map[String, String] = Map()) = """Call("%s", %s%s)""".format(
                       route.verb.value,
-                      "_prefix" + { if (route.path.parts.isEmpty) "" else """ + { _defaultPrefix } + """ } + route.path.parts.map {
+                      "_prefix(" + (!route.path.parts.isEmpty).toString + ") + " + route.path.parts.map {
                         case StaticPart(part) => "\"" + part + "\""
                         case DynamicPart(name, _, encode) => {
                           route.call.parameters.getOrElse(Nil).find(_.name == name).map { param =>
@@ -992,6 +1014,7 @@ object RoutesCompiler {
 
   private def baseIdent(r: Route, i: Int): String = r.call.packageName.replace(".", "_") + "_" + r.call.controller.replace(".", "_") + "_" + r.call.method + i
   private def routeIdent(r: Route, i: Int): String = baseIdent(r, i) + "_route"
+  private def handlerDefIdent(r: Route, i: Int): String = baseIdent(r, i) + "_handlerDef"
   private def invokerIdent(r: Route, i: Int): String = baseIdent(r, i) + "_invoker"
   private def includeIdent(r: Include, i: Int): String = r.router.replace(".", "_") + i + "_include"
 
@@ -1013,26 +1036,38 @@ object RoutesCompiler {
   def routeDefinitions(routerPackage: String, rules: List[Rule]): String = {
     rules.zipWithIndex.map {
       case (r: Route, i) =>
-        val pattern = "PathPattern(List(StaticPart(Routes.prefix)" + { if (r.path.parts.isEmpty) "" else """,StaticPart(Routes.defaultPrefix),""" } + r.path.parts.map(_.toString).mkString(",") + "))"
+        val pattern = "PathPattern(List(StaticPart(Routes.prefix)" + { if (r.path.parts.isEmpty) "" else """,StaticPart("/"),""" } + r.path.parts.map(_.toString).mkString(",") + "))"
         val fakeCall = controllerMethodCall(r, p => s"fakeValue[${p.typeName}]")
         val handlerDef = """HandlerDef(this.getClass.getClassLoader, """" + routerPackage + """", """" + r.call.packageName + "." + r.call.controller + """", """" + r.call.method + """", """ + r.call.parameters.filterNot(_.isEmpty).map { params =>
           params.map("classOf[" + _.typeName + "]").mkString(", ")
         }.map("Seq(" + _ + ")").getOrElse("Nil") + ""","""" + r.verb + """", """ + "\"\"\"" + r.comments.map(_.comment).mkString("\n") + "\"\"\", Routes.prefix + \"\"\"" + r.path + "\"\"\")"
         s"""
            |${markLines(r)}
-           |private[this] lazy val ${routeIdent(r, i)} = Route("${r.verb.value}", ${pattern})
+           |private[this] val ${routeIdent(r, i)} = Route("${r.verb.value}", ${pattern})
+           |private[this] val ${handlerDefIdent(r, i)} = ${handlerDef}
            |private[this] lazy val ${invokerIdent(r, i)} = createInvoker(
            |${fakeCall},
-           |${handlerDef})
+           |${handlerDefIdent(r, i)})
         """.stripMargin
       case (r: Include, i) =>
-        val routerExpression = if (r.constructed) s"new ${r.router}(routerContext)" else s"${r.router}"
+        val routerCreation = if (r.constructed) {
+          // Constructed router
+          s"""
+            |val rc = RouterContext(routerContext.application, p)
+            |val router = new ${r.router}(routerContext)
+            """.stripMargin
+        } else {
+          // Singleton router
+          s"""
+            |val router = ${r.router}
+            |router.setPrefix(p)
+            """.stripMargin
+        }
         s"""
           |${markLines(r)}
           |private val ${includeIdent(r, i)} = {
-          |  val p = prefix + (if(prefix.endsWith("/")) "" else "/") + "${r.prefix}")
-          |  val rc = RouterContext(routerContext.application, p)
-          |  val router = ${routerExpression}
+          |  val p = prefix + (if(prefix.endsWith("/")) "" else "/") + "${r.prefix}"
+          |  ${routerCreation}
           |  Include(router)
           |}""".stripMargin
     }.mkString("\n") +

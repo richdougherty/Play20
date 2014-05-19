@@ -266,6 +266,15 @@ trait Application {
     }
   }
 
+  // TODO: Move to a plugin
+  var reverseRoutesPrefixes = Map.empty[String,String]
+  def setReverseRoutesPrefix(routerName: String, prefix: String): Unit = {
+    reverseRoutesPrefixes = reverseRoutesPrefixes + (routerName -> prefix)
+  }
+  def getReverseRoutesPrefix(routerName: String): Option[String] = {
+    reverseRoutesPrefixes.get(routerName)
+  }
+
   // Reconfigure logger
   {
 
