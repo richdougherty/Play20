@@ -23,6 +23,14 @@ import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
 object Application extends Controller {
 
+  object views {
+    object html {
+      def index(x: Any): String = "index"
+      def hello(x: Any): String = "hello"
+      def form(x: Any): String = "hello"
+    }
+  }
+
   def plainHelloWorld = Action {
     Ok("Hello World")
   }
