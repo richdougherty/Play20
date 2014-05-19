@@ -158,6 +158,38 @@
 
 </div>
 
+<div>
+
+    <h2>Asset Pipeline</h2>
+
+    <p>
+        There is a new <i>asset pipeline</i> for post-processing web assets. The pipeline is a series of stages that transform assets. Each stage runs one after the other. The asset pipeline is typically where assets are optimized and tuned.
+    </p>
+    <p>
+        Browse to <a href="#code/build.sbt" class="shortcut">build.sbt</a>. You'll see a configuration option called <code>pipelineStages</code>.
+    </p>
+
+    <pre>pipelineStages := Seq(rjs, digest, gzip)</pre>
+
+    <p>
+        Each stage is provided by a plugin:
+    </p>
+
+    <ol>
+        <li>the RequireJS plugin (sbt-rjs) optimizes and combines assets</li>
+        <li>the digest plugin (sbt-digest) generates hashes that can be used to identify assets for caching (also known as "fingerprinting")</li>
+        <li>the gzip plugin (sbt-gzip) compresses assets ahead of time to save CPU later</li>
+    </ol>
+
+    <p>
+        RequireJS and gzip encoding will be familiar from Play 2.2. However the RequireJS plugin has changed in Play 2.3. The digest plugin and its support for asset caching is completely new. Read on to find out what's changed with the RequireJS plugin and to learn about the new digest plugin.
+    </p>
+
+    <p>
+        The asset pipeline doesn't run in development mode, so on the following pages you may be asked to run your application in production mode (<code>activator start</code>) to see a demonstration.
+    </p>
+
+</div>
 
 <div>
 
@@ -187,6 +219,47 @@
     </p>
 
     <pre><code>RjsKeys.webJarCdn := None</code></pre>
+
+</div>
+
+<div>
+
+    <h2>Asset Fingerprinting</h2>
+
+    <p>
+        Asset fingerprinting is a caching technique that uses hashes to identify when assets change. Each file has a hash added into its name so that its content can be uniquely identified by its URL and cached aggressively.
+    </p>
+    <p>
+        For example, a file called <code>main.css</code> cannot be cached for too long, in case we need to publish a new version with different content. However, a file called <code>84a01dc6c53f0d2a58a2f7ff9e17a294-main.css</code> can be safely cached <i>forever</i> because, if its content changes, then it will have a different name. Therefore we can use very aggressive caching for these assets, a technique called <a href="https://developer.yahoo.com/performance/rules.html#expires">far future expires</a>.
+    </p>
+
+    <p>
+        To use asset fingerprinting you need to enable hash generation by adding the the digest plugin to the asset pipeline. Once you've done that you use the <code>Assets.versioned</code> method in your application routes and reverse routes.</a>
+    </p>
+
+    <p>
+        Browse to <a href="#code/build.sbt" class="shortcut">build.sbt</a>. You'll see that <code>digest</code> is part of the <code>pipelineStages</code> setting. This plugin calculates hashes for all assets ahead of time, so that assets can be served quickly in production.
+    </p>
+
+    <p>
+        Browse to <a href="#code/conf/routes" class="shortcut">routes</a>. You can see that the <code>Assets.versioned</code> method is being used to serve assets instead of the <code>Assets.at</code> method (which is used to serve unfingerprinted assets).
+    </p>
+
+    <pre>GET        /assets/*file        controllers.Assets.versioned(path="/public", file: Asset)</pre>
+
+    <p>
+        Browse to a template like <a href="#code/app/views/index.scala.html" class="shortcut">index.scala.html</a>. You'll see that all the assets are looked up by getting a reverse route to <code>Asset.versioned</code>. Reverse routing will return names with hashes in them.
+    </p>
+
+    <pre>&lt;link rel="stylesheet" media="screen" href="@routes.Assets.versioned("stylesheets/main.css")"&gt;</pre>
+
+    <p>
+        Asset fingerprinting, like other parts of the asset pipeline, doesn't run when you're working in development mode, so it won't work in the Activator UI or when you use Activator with the <code>run</code> command. You'll need to use the <code>start</code> command to try out this feature.
+    </p>
+
+    <p>
+        If you run your application in production mode (using <code>activator start</code>) and inspect the application traffic then you'll see asset fingerprinting in action. All asset names will have hashes in them and all assets will be have <code>Expires</code> headers set one year in the future.
+    </p>
 
 </div>
 
