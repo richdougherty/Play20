@@ -392,8 +392,6 @@ trait ActionFunction[-R[_], +P[_]] {
   def andThen[Q[_]](other: ActionFunction[P, Q]): ActionFunction[R, Q] = new ActionFunction[R, Q] {
     def invokeBlock[A](request: R[A], block: Q[A] => Future[Result]) =
       self.invokeBlock[A](request, other.invokeBlock[A](_, block))
-    override protected def composeParser[A](bodyParser: BodyParser[A]): BodyParser[A] = self.composeParser(bodyParser)
-    override protected def composeAction[A](action: Action[A]): Action[A] = self.composeAction(action)
   }
 
   /**
@@ -409,6 +407,26 @@ trait ActionFunction[-R[_], +P[_]] {
     other.andThen(this)
 
   /**
+   * Convert an ActionFunction into an ActionBuilder provided that the
+   * ActionFunction's first type parameter is a supertype of Request.
+   *
+   * @param ev Evidence of the subtype relationship between Request and R.
+   */
+  def toBuilder(implicit ev: Request[_] <:< R[_]): ActionBuilder[P] = new ActionBuilder[P] {
+    def invokeBlock[A](request: Request[A], block: P[A] => Future[Result]): Future[Result] = {
+      self.invokeBlock(request, block)
+    }
+  }
+
+}
+
+/**
+ * Provides helpers for creating `Action` values.
+ */
+trait ActionBuilder[+R[_]] extends ActionFunction[Request, R] {
+  self =>
+
+  /**
    * Constructs an `Action`.
    *
    * For example:
@@ -421,10 +439,9 @@ trait ActionFunction[-R[_], +P[_]] {
    * @tparam A the type of the request body
    * @param bodyParser the `BodyParser` to use to parse the request body
    * @param block the action code
-   * @param ev proof that this ActionFunction can take a Request as input
    * @return an action
    */
-  final def apply[A](bodyParser: BodyParser[A])(block: P[A] => Result)(implicit ev: Request[A] <:< R[A]): Action[A] = async(bodyParser) { req: P[A] =>
+  final def apply[A](bodyParser: BodyParser[A])(block: R[A] => Result): Action[A] = async(bodyParser) { req: R[A] =>
     Future.successful(block(req))
   }
 
@@ -439,10 +456,9 @@ trait ActionFunction[-R[_], +P[_]] {
    * }}}
    *
    * @param block the action code
-   * @param ev proof that this ActionFunction can take a Request as input
    * @return an action
    */
-  final def apply(block: P[AnyContent] => Result)(implicit ev: Request[AnyContent] <:< R[AnyContent]): Action[AnyContent] = apply(BodyParsers.parse.anyContent)(block)
+  final def apply(block: R[AnyContent] => Result): Action[AnyContent] = apply(BodyParsers.parse.anyContent)(block)
 
   /**
    * Constructs an `Action` with default content, and no request parameter.
@@ -455,10 +471,9 @@ trait ActionFunction[-R[_], +P[_]] {
    * }}}
    *
    * @param block the action code
-   * @param ev proof that this ActionFunction can take a Request as input
    * @return an action
    */
-  final def apply(block: => Result)(implicit ev: Request[AnyContent] <:< R[AnyContent]): Action[AnyContent] = apply(_ => block)
+  final def apply(block: => Result): Action[AnyContent] = apply(_ => block)
 
   /**
    * Constructs an `Action` that returns a future of a result, with default content, and no request parameter.
@@ -473,10 +488,9 @@ trait ActionFunction[-R[_], +P[_]] {
    * }}}
    *
    * @param block the action code
-   * @param ev proof that this ActionFunction can take a Request as input
    * @return an action
    */
-  final def async(block: => Future[Result])(implicit ev: Request[AnyContent] <:< R[AnyContent]): Action[AnyContent] = async(_ => block)
+  final def async(block: => Future[Result]): Action[AnyContent] = async(_ => block)
 
   /**
    * Constructs an `Action` that returns a future of a result, with default content.
@@ -491,10 +505,9 @@ trait ActionFunction[-R[_], +P[_]] {
    * }}}
    *
    * @param block the action code
-   * @param ev proof that this ActionFunction can take a Request as input
    * @return an action
    */
-  final def async(block: P[AnyContent] => Future[Result])(implicit ev: Request[AnyContent] <:< R[AnyContent]): Action[AnyContent] = async(BodyParsers.parse.anyContent)(block)
+  final def async(block: R[AnyContent] => Future[Result]): Action[AnyContent] = async(BodyParsers.parse.anyContent)(block)
 
   /**
    * Constructs an `Action` that returns a future of a result, with default content.
@@ -509,10 +522,9 @@ trait ActionFunction[-R[_], +P[_]] {
    * }}}
    *
    * @param block the action code
-   * @param ev proof that this ActionFunction can take a Request as input
    * @return an action
    */
-  final def async[A](bodyParser: BodyParser[A])(block: P[A] => Future[Result])(implicit ev: Request[A] <:< R[A]): Action[A] = composeAction(new Action[A] {
+  final def async[A](bodyParser: BodyParser[A])(block: R[A] => Future[Result]): Action[A] = composeAction(new Action[A] {
     def parser = composeParser(bodyParser)
     def apply(request: Request[A]) = try {
       invokeBlock(request, block)
@@ -522,7 +534,7 @@ trait ActionFunction[-R[_], +P[_]] {
       // LinkageError is similarly harmless in Play Framework, since automatic reloading could easily trigger it
       case e: LinkageError => throw new RuntimeException(e)
     }
-    override def executionContext = self.executionContext
+    override def executionContext = ActionBuilder.this.executionContext
   })
 
   /**
@@ -541,21 +553,12 @@ trait ActionFunction[-R[_], +P[_]] {
    */
   protected def composeAction[A](action: Action[A]): Action[A] = action
 
-}
-
-/**
- * Provides helpers for creating `Action` values.
- */
-trait ActionBuilder[+R[_]] extends ActionFunction[Request, R] {
-  self =>
-
   override def andThen[Q[_]](other: ActionFunction[R, Q]): ActionBuilder[Q] = new ActionBuilder[Q] {
     def invokeBlock[A](request: Request[A], block: Q[A] => Future[Result]) =
       self.invokeBlock[A](request, other.invokeBlock[A](_, block))
     override protected def composeParser[A](bodyParser: BodyParser[A]): BodyParser[A] = self.composeParser(bodyParser)
     override protected def composeAction[A](action: Action[A]): Action[A] = self.composeAction(action)
   }
-
 }
 
 /**
