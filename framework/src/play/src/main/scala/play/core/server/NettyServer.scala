@@ -19,9 +19,19 @@ import play.api._
 import play.core.server.netty._
 
 import java.security.cert.X509Certificate
+import java.util.Properties
 import scala.util.control.NonFatal
 import com.typesafe.netty.http.pipelining.HttpPipeliningHandler
 import play.server.SSLEngineProvider
+
+case class ServerConfig(
+  appProvider: ApplicationProvider,
+  port: Option[Int],
+  sslPort: Option[Int] = None,
+  address: String = "0.0.0.0",
+  mode: Mode.Mode = Mode.Prod,
+  properties: Properties // TODO: Enumerate individual config settings
+)
 
 /**
  * provides a stopable Server
@@ -34,11 +44,12 @@ trait ServerWithStop {
 /**
  * creates a Server implementation based Netty
  */
-class NettyServer(appProvider: ApplicationProvider, port: Option[Int], sslPort: Option[Int] = None, address: String = "0.0.0.0", val mode: Mode.Mode = Mode.Prod) extends Server with ServerWithStop {
+class NettyServer(config: ServerConfig) extends Server with ServerWithStop {
 
-  require(port.isDefined || sslPort.isDefined, "Neither http.port nor https.port is specified")
+  require(config.port.isDefined || config.sslPort.isDefined, "Neither http.port nor https.port is specified")
 
-  def applicationProvider = appProvider
+  def applicationProvider = config.appProvider
+  def mode = config.mode
 
   private def newBootstrap = new ServerBootstrap(
     new org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory(
@@ -86,19 +97,19 @@ class NettyServer(appProvider: ApplicationProvider, port: Option[Int], sslPort: 
   val defaultUpStreamHandler = new PlayDefaultUpstreamHandler(this, allChannels)
 
   // The HTTP server channel
-  val HTTP = port.map { port =>
+  val HTTP = config.port.map { port =>
     val bootstrap = newBootstrap
     bootstrap.setPipelineFactory(new PlayPipelineFactory)
-    val channel = bootstrap.bind(new InetSocketAddress(address, port))
+    val channel = bootstrap.bind(new InetSocketAddress(config.address, port))
     allChannels.add(channel)
     (bootstrap, channel)
   }
 
   // Maybe the HTTPS server channel
-  val HTTPS = sslPort.map { port =>
+  val HTTPS = config.sslPort.map { port =>
     val bootstrap = newBootstrap
     bootstrap.setPipelineFactory(new PlayPipelineFactory(secure = true))
-    val channel = bootstrap.bind(new InetSocketAddress(address, port))
+    val channel = bootstrap.bind(new InetSocketAddress(config.address, port))
     allChannels.add(channel)
     (bootstrap, channel)
   }
@@ -203,12 +214,15 @@ object NettyServer {
     }
 
     try {
-      val server = new NettyServer(
+      val properties = System.getProperties()
+      val config = ServerConfig(
         new StaticApplication(applicationPath),
-        Option(System.getProperty("http.port")).fold(Option(9000))(p => if (p == "disabled") Option.empty[Int] else Option(Integer.parseInt(p))),
-        Option(System.getProperty("https.port")).map(Integer.parseInt(_)),
-        Option(System.getProperty("http.address")).getOrElse("0.0.0.0")
+        Option(properties.getProperty("http.port")).fold(Option(9000))(p => if (p == "disabled") Option.empty[Int] else Option(Integer.parseInt(p))),
+        Option(properties.getProperty("https.port")).map(Integer.parseInt(_)),
+        Option(properties.getProperty("http.address")).getOrElse("0.0.0.0"),
+        properties = properties
       )
+      val server = new NettyServer(config)
 
       Runtime.getRuntime.addShutdownHook(new Thread {
         override def run {
@@ -271,9 +285,11 @@ object NettyServer {
     play.utils.Threads.withContextClassLoader(this.getClass.getClassLoader) {
       try {
         val appProvider = new ReloadableApplication(buildLink, buildDocHandler)
-        new NettyServer(appProvider, httpPort,
+        val config = ServerConfig(appProvider, httpPort,
           httpsPort,
-          mode = Mode.Dev)
+          mode = Mode.Dev,
+          properties = System.getProperties)
+        new NettyServer(config)
       } catch {
         case e: ExceptionInInitializerError => throw e.getCause
       }
