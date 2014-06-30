@@ -86,6 +86,7 @@ object Dependencies {
     "ch.qos.logback" % "logback-classic" % "1.1.1",
 
     "com.typesafe.akka" %% "akka-actor" % "2.3.3",
+    "com.typesafe.akka" %% "akka-http-core" % "2.3-SNAPSHOT",
     "com.typesafe.akka" %% "akka-slf4j" % "2.3.3",
 
     "org.scala-stm" %% "scala-stm" % "0.7",

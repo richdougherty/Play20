@@ -17,3 +17,5 @@ libraryDependencies <+= sbtVersion { sv =>
 }
 
 libraryDependencies += "org.webjars" % "webjars-locator" % "0.12"
+
+addSbtPlugin("net.virtual-void" % "sbt-dependency-graph" % "0.7.4")
