@@ -23,7 +23,7 @@ import java.util.Properties
 import scala.util.control.NonFatal
 // import com.typesafe.netty.http.pipelining.HttpPipeliningHandler
 // import play.server.SSLEngineProvider
-import play.core.server.netty.NettyServer
+import play.core.server.netty.{ NettyServer => NewNettyServer }
 
 case class ServerConfig(
   appProvider: ApplicationProvider,
@@ -51,6 +51,46 @@ object noCATrustManager extends X509TrustManager {
   def getAcceptedIssuers() = nullArray
 }
 
+
+// // Simple error monad
+// sealed trait Result[+A,+B]
+// final case class Success[+B](value: A) extends Result[Nothing,B] {
+//   def map[B1>:B](f: B => B1): Result[A,B] = new Success(f(value))
+//   def flatMap[A1>:A,B1>:B](f: B => Result[A1,B1]): Result[A1,B1] = f(value)
+// }
+// final case class Error(message: String) extends Result[Nothing] {
+//   def map[B](f: Nothing => B): Result[B] = this
+//   def flatMap[B](f: Nothing => Result[B]): Result[B] = this
+// }
+
+//class ServerExitException(message: String, returnCode: Int = -1) extends ServerException
+
+trait ServerProcess {
+  def args: Seq[String]
+  def properties: Properties
+  def pid: Option[String]
+  def addShutdownHook(hook: => Unit): Unit
+  def exit(message: String, cause: Option[Throwable] = None, returnCode: Int = -1): Nothing
+}
+class RealServerProcess(val args: Seq[String]) extends ServerProcess {
+  def properties: Properties = System.getProperties
+  def pid: Option[String] = {
+    import java.lang.management.ManagementFactory
+    ManagementFactory.getRuntimeMXBean.getName.split('@').headOption
+  }
+  def addShutdownHook(hook: => Unit): Unit = {
+    Runtime.getRuntime.addShutdownHook(new Thread {
+      override def run() = hook
+    })
+  }
+  def exit(message: String, cause: Option[Throwable] = None, returnCode: Int = -1): Nothing = {
+    System.err.println(message)
+    cause.foreach(_.printStackTrace())
+    System.exit(returnCode)
+    throw new Exception("System.exit called") // Code never reached, but gives the method a type of Nothing
+  }
+}
+
 /**
  * bootstraps Play application with a NettyServer backened
  */
@@ -62,55 +102,68 @@ object ServerStart {
    * creates a NettyServer based on the application represented by applicationPath
    * @param applicationPath path to application
    */
-  def createServer(applicationPath: File): Option[NettyServer] = {
-    // Manage RUNNING_PID file
-    java.lang.management.ManagementFactory.getRuntimeMXBean.getName.split('@').headOption.map { pid =>
-      val pidFile = Option(System.getProperty("pidfile.path")).map(new File(_)).getOrElse(new File(applicationPath.getAbsolutePath, "RUNNING_PID"))
+  def createServer(process: ServerProcess): NewNettyServer = {
+    def property(name: String): Option[String] = Option(process.properties.getProperty(name))
 
-      // The Logger is not initialized yet, we print the Process ID on STDOUT
-      println("Play server process ID is " + pid)
+    val applicationPath: File = {
+      val argumentPath = process.args.headOption
+      val propertyPath = property("user.dir")
+      val path = argumentPath orElse propertyPath getOrElse process.exit("No application path supplied")
+      val file = new File(path)
+      if (!(file.exists && file.isDirectory)) {
+        process.exit(s"Bad application path: $path")
+      }
+      file
+    }
+
+    // Handle pid file creation and deletion
+    {
+      val pid = process.pid getOrElse process.exit("Couldn't determine current process's pid")
+      val pidFileProperty = property("pidfile.path").map(new File(_))
+      val defaultPidFile = new File(applicationPath, "RUNNING_PID")
+      val pidFile = (pidFileProperty getOrElse defaultPidFile).getAbsoluteFile
 
       if (pidFile.getAbsolutePath != "/dev/null") {
+
         if (pidFile.exists) {
-          println("This application is already running (Or delete " + pidFile.getAbsolutePath + " file).")
-          System.exit(-1)
+          process.exit(s"This application is already running (Or delete ${pidFile.getPath} file).")
         }
 
-        new FileOutputStream(pidFile).write(pid.getBytes)
-        Runtime.getRuntime.addShutdownHook(new Thread {
-          override def run {
-            pidFile.delete()
-          }
-        })
+        val out = new FileOutputStream(pidFile)
+        try out.write(pid.getBytes) finally out.close() // RICH: This wasn't being closed before, was it intentionally being left open?
+
+        process.addShutdownHook { pidFile.delete() }
       }
     }
 
-    try {
-      val properties = System.getProperties()
-      val config = ServerConfig(
-        new StaticApplication(applicationPath),
-        Option(properties.getProperty("http.port")).fold(Option(9000))(p => if (p == "disabled") Option.empty[Int] else Option(Integer.parseInt(p))),
-        Option(properties.getProperty("https.port")).map(Integer.parseInt(_)),
-        Option(properties.getProperty("http.address")).getOrElse("0.0.0.0"),
-        properties = properties
-      )
-      val server = new NettyServer(config)
+    // Parse HTTP config
 
-      Runtime.getRuntime.addShutdownHook(new Thread {
-        override def run {
-          server.stop()
+    val httpPort = property("http.port").fold[Option[Int]](Some(9000)) {
+      case "disabled" => None
+      case str =>
+        val i = try Integer.parseInt(str) catch {
+          case _: NumberFormatException => process.exit(s"Invalid HTTP port: $str")
         }
-      })
-
-      Some(server)
-    } catch {
-      case NonFatal(e) => {
-        println("Oops, cannot start the server.")
-        e.printStackTrace()
-        None
+        Some(i)
+    }
+    val httpsPort = property("https.port").map { str =>
+      try Integer.parseInt(str) catch {
+          case _: NumberFormatException => process.exit(s"Invalid HTTPS port: $str")
       }
     }
+    val address = property("http.address").getOrElse("0.0.0.0")
 
+    val config = ServerConfig(
+      new StaticApplication(applicationPath),
+      port = httpPort,
+      sslPort = httpsPort,
+      address = address,
+      mode = Mode.Prod,
+      properties = process.properties
+    )
+    val server = new NewNettyServer(config)
+    process.addShutdownHook { server.stop() }
+    server
   }
 
   /**
@@ -119,18 +172,10 @@ object ServerStart {
    * @param args
    */
   def main(args: Array[String]) {
-    args.headOption
-      .orElse(Option(System.getProperty("user.dir")))
-      .map { applicationPath =>
-        val applicationFile = new File(applicationPath)
-        if (!(applicationFile.exists && applicationFile.isDirectory)) {
-          println("Bad application path: " + applicationPath)
-        } else {
-          createServer(applicationFile).getOrElse(System.exit(-1))
-        }
-      }.getOrElse {
-        println("No application path supplied")
-      }
+    val process = new RealServerProcess(args)
+    try createServer(process) catch {
+      case NonFatal(e) => process.exit("Oops, cannot start the server.", cause = Some(e))
+    }
   }
 
   /**
@@ -139,7 +184,7 @@ object ServerStart {
    * <p>This method uses simple Java types so that it can be used with reflection by code
    * compiled with different versions of Scala.
    */
-  def mainDevOnlyHttpsMode(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpsPort: Int): NettyServer = {
+  def mainDevOnlyHttpsMode(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpsPort: Int): NewNettyServer = {
     mainDev(buildLink, buildDocHandler, None, Some(httpsPort))
   }
 
@@ -149,11 +194,11 @@ object ServerStart {
    * <p>This method uses simple Java types so that it can be used with reflection by code
    * compiled with different versions of Scala.
    */
-  def mainDevHttpMode(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpPort: Int): NettyServer = {
+  def mainDevHttpMode(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpPort: Int): NewNettyServer = {
     mainDev(buildLink, buildDocHandler, Some(httpPort), Option(System.getProperty("https.port")).map(Integer.parseInt(_)))
   }
 
-  private def mainDev(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpPort: Option[Int], httpsPort: Option[Int]): NettyServer = {
+  private def mainDev(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpPort: Option[Int], httpsPort: Option[Int]): NewNettyServer = {
     play.utils.Threads.withContextClassLoader(this.getClass.getClassLoader) {
       try {
         val appProvider = new ReloadableApplication(buildLink, buildDocHandler)
@@ -161,7 +206,7 @@ object ServerStart {
           httpsPort,
           mode = Mode.Dev,
           properties = System.getProperties)
-        new NettyServer(config)
+        new NewNettyServer(config)
       } catch {
         case e: ExceptionInInitializerError => throw e.getCause
       }
@@ -171,9 +216,9 @@ object ServerStart {
 
 }
 
-// object NettyServer {
-//   def main(args: Array[String]) {
-//     System.err.println(s"play.core.server.NettyServer.main is deprecated. Please use ServerStart.main instead.")
-//     ServerStart.main(args)
-//   }
-// }
+object NettyServer {
+  def main(args: Array[String]) {
+    System.err.println(s"play.core.server.NettyServer.main is deprecated. Please use play.core.server.ServerStart.main instead.")
+    ServerStart.main(args)
+  }
+}
