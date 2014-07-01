@@ -135,7 +135,7 @@ object WebDriverFactory {
  * @param port HTTP port to bind on.
  * @param application The FakeApplication to load in this server.
  */
-case class TestServer(port: Int, application: FakeApplication = FakeApplication(), sslPort: Option[Int] = None, properties: Properties = System.getProperties()) {
+case class TestServer(port: Int, application: FakeApplication = FakeApplication(), sslPort: Option[Int] = None, properties: Properties = System.getProperties) {
 
   private var server: NettyServer = _
 

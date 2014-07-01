@@ -20,8 +20,6 @@ import scala.util.control.NonFatal
  */
 class NettyServer(config: ServerConfig) extends Server with ServerWithStop {
 
-  require(config.port.isDefined || config.sslPort.isDefined, "Neither http.port nor https.port is specified")
-
   def applicationProvider = config.appProvider
   def mode = config.mode
 

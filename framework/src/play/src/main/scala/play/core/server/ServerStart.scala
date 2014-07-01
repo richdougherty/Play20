@@ -104,7 +104,7 @@ object ServerStart {
    * creates a NettyServer based on the application represented by applicationPath
    * @param applicationPath path to application
    */
-  def createServer(process: ServerProcess): NewNettyServer = {
+  def createServer(process: ServerProcess, appProviderCtor: File => ApplicationProvider): NewNettyServer = {
     def property(name: String): Option[String] = Option(process.properties.getProperty(name))
 
     val applicationPath: File = {
@@ -153,10 +153,12 @@ object ServerStart {
           case _: NumberFormatException => process.exit(s"Invalid HTTPS port: $str")
       }
     }
+    if (!(httpPort orElse httpsPort).isDefined) process.exit("Must provide either an HTTP or HTTPS port")
+
     val address = property("http.address").getOrElse("0.0.0.0")
 
     val config = ServerConfig(
-      new StaticApplication(applicationPath),
+      appProvider = appProviderCtor(applicationPath),
       port = httpPort,
       sslPort = httpsPort,
       address = address,
@@ -175,7 +177,8 @@ object ServerStart {
    */
   def main(args: Array[String]) {
     val process = new RealServerProcess(args)
-    try createServer(process) catch {
+    val appProviderCtor = ((applicationPath: File) => new StaticApplication(applicationPath))
+    try createServer(process, appProviderCtor) catch {
       case NonFatal(e) => process.exit("Oops, cannot start the server.", cause = Some(e))
     }
   }

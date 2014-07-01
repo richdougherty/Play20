@@ -46,7 +46,7 @@ object WsSslSpec extends PlaySpecification with WsTestClient with Results {
         })
 
         try {
-          val server = TestServer(port = Helpers.testServerPort, application, sslPort = Some(11443))
+          val server = TestServer(port = Helpers.testServerPort, application = application, sslPort = Some(11443))
           Helpers.running(server) {
             val client = WS.client
             await(client.url("https://localhost:11443/ssl").get()).status must_== 200
@@ -84,7 +84,7 @@ object WsSslSpec extends PlaySpecification with WsTestClient with Results {
         })
 
         try {
-          val server = TestServer(port = Helpers.testServerPort, application, sslPort = Some(11443))
+          val server = TestServer(port = Helpers.testServerPort, application = application, sslPort = Some(11443))
           Helpers.running(server) {
             val client = WS.client
             await(client.url("https://localhost:11443/ssl").get()).status must_== 200
@@ -121,7 +121,7 @@ object WsSslSpec extends PlaySpecification with WsTestClient with Results {
         })
 
         try {
-          val server = TestServer(port = Helpers.testServerPort, application, sslPort = Some(11443))
+          val server = TestServer(port = Helpers.testServerPort, application = application, sslPort = Some(11443))
           Helpers.running(server) {
             val client = WS.client
             await(client.url("https://localhost:11443/ssl").get()).status must_== 200
