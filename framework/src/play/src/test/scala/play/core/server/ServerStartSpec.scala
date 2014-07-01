@@ -8,7 +8,9 @@ import java.io.File
 import java.nio.charset.Charset
 import java.util.Properties
 import org.specs2.mutable.Specification
+import play.api.Play
 import play.core.ApplicationProvider
+import play.core.server.netty.{ NettyServer => NewNettyServer }
 
 object ServerStartSpec extends Specification {
 
@@ -37,6 +39,8 @@ object ServerStartSpec extends Specification {
     val pid: Option[String] = None
   ) extends ServerProcess {
 
+    val classLoader: ClassLoader = getClass.getClassLoader
+
     val properties = new Properties()
     for ((k, v) <- propertyMap) { properties.put(k, v) }
 
@@ -53,14 +57,6 @@ object ServerStartSpec extends Specification {
     }
   }
 
-  // class TestApplication(application: Application) extends ApplicationProvider {
-
-  //   Play.start(application)
-
-  //   def get = Success(application)
-  //   def path = application.path
-  // }
-
   class FakeApplicationProvider(applicationPath: File) extends ApplicationProvider {
     val path = applicationPath
     def get = ???
@@ -68,8 +64,17 @@ object ServerStartSpec extends Specification {
 
   val fakeAppProviderCtor = ((applicationPath: File) => new FakeApplicationProvider(applicationPath))
 
-  "ServerStart" should {
+  class FakeServer(config: ServerConfig) extends Server with ServerWithStop {
+    def applicationProvider = config.appProvider
+    def mode = config.mode
+    def mainAddress = ???
+    override def stop() = {
+      Play.stop()
+      super.stop()
+    }
+  }
 
+  "ServerStart" should {
 
     "not start without a path" in {
       val process = new FakeServerProcess()
@@ -98,23 +103,31 @@ object ServerStartSpec extends Specification {
       ServerStart.createServer(process, fakeAppProviderCtor) must throwAn(ExitException("Must provide either an HTTP or HTTPS port"))
     }
 
-    def launchWithTempDir(block: File => (Seq[String], Map[String,String],Boolean,File)) = withTempDir { tempDir =>
-      val (args, basePropMap, expectPidFile, pidFile) = block(tempDir)
+    case class LaunchPlan[S <: ServerWithStop](
+      val args: Seq[String] = Seq(),
+      val basePropMap: Map[String, String] = Map.empty,
+      val expectPidFile: Boolean = true,
+      val pidFile: File,
+      val expectedServerClass: Class[S] = classOf[NewNettyServer]
+    )
+
+    def launchWithTempDir(block: File => LaunchPlan[_]) = withTempDir { tempDir =>
+      val launchPlan = block(tempDir)
       val process = new FakeServerProcess(
-        args = args,
-        propertyMap = basePropMap ++ Map("http.port" -> "29234"),
+        args = launchPlan.args,
+        propertyMap = launchPlan.basePropMap ++ Map("http.port" -> "29234"),
         pid = Some("123")
       )
       val server = ServerStart.createServer(process, fakeAppProviderCtor)
       try {
-        server must not beNull
+        server.getClass must_== launchPlan.expectedServerClass
 
-        // Check pid file exists
+        // Check pid file existence
 
-        pidFile.exists must_== expectPidFile
-        if (expectPidFile) {
+        launchPlan.pidFile.exists must_== launchPlan.expectPidFile
+        if (launchPlan.expectPidFile) {
           val ascii = Charset.forName("US-ASCII")
-          Files.toString(pidFile, ascii) must_== "123"
+          Files.toString(launchPlan.pidFile, ascii) must_== "123"
         }
 
       } finally {
@@ -123,26 +136,22 @@ object ServerStartSpec extends Specification {
       }
 
       // Check pid file deleted on shutdown
-      pidFile.exists must beFalse
+      launchPlan.pidFile.exists must beFalse
     }
 
     "launch with path in args" in launchWithTempDir { tempDir =>
-      (
-        Seq(tempDir.getAbsolutePath),
-        Map.empty,
-        true,
-        new File(tempDir, "RUNNING_PID")
+      LaunchPlan[NewNettyServer](
+        args = Seq(tempDir.getAbsolutePath),
+        pidFile = new File(tempDir, "RUNNING_PID")
       )
     }
 
     "launch with path in prop" in launchWithTempDir { tempDir =>
       val subdir = new File(tempDir, "appdir")
       subdir.mkdir()
-      (
-        Seq(),
-        Map("user.dir" -> subdir.getAbsolutePath),
-        true,
-        new File(subdir, "RUNNING_PID")
+      LaunchPlan[NewNettyServer](
+        basePropMap = Map("user.dir" -> subdir.getAbsolutePath),
+        pidFile = new File(subdir, "RUNNING_PID")
       )
     }
 
@@ -150,20 +159,28 @@ object ServerStartSpec extends Specification {
       val subdir = new File(tempDir, "appdir")
       subdir.mkdir()
       val pidFile = new File(tempDir, "mypid")
-      (
-        Seq(subdir.getAbsolutePath),
-        Map("pidfile.path" -> pidFile.getAbsolutePath),
-        true,
-        pidFile
+      LaunchPlan[NewNettyServer](
+        args = Seq(subdir.getAbsolutePath),
+        basePropMap = Map("pidfile.path" -> pidFile.getAbsolutePath),
+        pidFile = pidFile
       )
     }
 
     "launch with no pidfile if set to /dev/null" in launchWithTempDir { tempDir =>
-      (
-        Seq(tempDir.getAbsolutePath),
-        Map("pidfile.path" -> "/dev/null"),
-        false,
-        new File(tempDir, "RUNNING_PID")
+      LaunchPlan[NewNettyServer](
+        args = Seq(tempDir.getAbsolutePath),
+        basePropMap = Map("pidfile.path" -> "/dev/null"),
+        expectPidFile = false,
+        pidFile = new File(tempDir, "RUNNING_PID")
+      )
+    }
+
+    "launch with a custom server" in launchWithTempDir { tempDir =>
+      LaunchPlan[FakeServer](
+        args = Seq(tempDir.getAbsolutePath),
+        basePropMap = Map("server.class" -> classOf[FakeServer].getName),
+        pidFile = new File(tempDir, "RUNNING_PID"),
+        expectedServerClass = classOf[FakeServer]
       )
     }
 

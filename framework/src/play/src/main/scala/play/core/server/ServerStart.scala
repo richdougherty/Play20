@@ -68,6 +68,7 @@ object noCATrustManager extends X509TrustManager {
 //class ServerExitException(message: String, returnCode: Int = -1) extends ServerException
 
 trait ServerProcess {
+  def classLoader: ClassLoader
   def args: Seq[String]
   def properties: Properties
   def pid: Option[String]
@@ -75,6 +76,7 @@ trait ServerProcess {
   def exit(message: String, cause: Option[Throwable] = None, returnCode: Int = -1): Nothing
 }
 class RealServerProcess(val args: Seq[String]) extends ServerProcess {
+  def classLoader: ClassLoader = Thread.currentThread.getContextClassLoader
   def properties: Properties = System.getProperties
   def pid: Option[String] = {
     import java.lang.management.ManagementFactory
@@ -104,7 +106,7 @@ object ServerStart {
    * creates a NettyServer based on the application represented by applicationPath
    * @param applicationPath path to application
    */
-  def createServer(process: ServerProcess, appProviderCtor: File => ApplicationProvider): NewNettyServer = {
+  def createServer(process: ServerProcess, appProviderCtor: File => ApplicationProvider): ServerWithStop = {
     def property(name: String): Option[String] = Option(process.properties.getProperty(name))
 
     val applicationPath: File = {
@@ -157,15 +159,30 @@ object ServerStart {
 
     val address = property("http.address").getOrElse("0.0.0.0")
 
-    val config = ServerConfig(
-      appProvider = appProviderCtor(applicationPath),
-      port = httpPort,
-      sslPort = httpsPort,
-      address = address,
-      mode = Mode.Prod,
-      properties = process.properties
-    )
-    val server = new NewNettyServer(config)
+    val server = {
+      val clazz = property("server.class").map { className =>
+        try process.classLoader.loadClass(className) catch {
+          case _: NoSuchMethodException => process.exit("Couldn't find server class '$className'")
+        }
+      }.getOrElse(classOf[NewNettyServer])
+      if (!classOf[ServerWithStop].isAssignableFrom(clazz)) process.exit("Server class $className must implement ServerWithStop")
+      val ctor = try clazz.getConstructor(classOf[ServerConfig]) catch {
+        case _: NoSuchMethodException => process.exit("Server class $className didn't have a constructor that takes a ServerConfig")
+        case _: SecurityException => process.exit("Server class $className constructor couldn't be accessed")
+      }
+
+      val config = ServerConfig(
+        appProvider = appProviderCtor(applicationPath),
+        port = httpPort,
+        sslPort = httpsPort,
+        address = address,
+        mode = Mode.Prod,
+        properties = process.properties
+      )
+
+      ctor.newInstance(config).asInstanceOf[ServerWithStop]
+    }
+
     process.addShutdownHook { server.stop() }
     server
   }
