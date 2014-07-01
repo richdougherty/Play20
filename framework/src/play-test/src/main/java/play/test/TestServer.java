@@ -19,7 +19,7 @@ public class TestServer extends play.api.test.TestServer {
      * @param application The FakeApplication to load in this server.
      */
     public TestServer(int port, FakeApplication application) {
-        super(port, application.getWrappedApplication(), (Option) None$.MODULE$);
+        super(port, application.getWrappedApplication(), (Option) None$.MODULE$, System.getProperties()); // TODO: Support mocked Properties for Java
     }
 
     /**
@@ -29,7 +29,7 @@ public class TestServer extends play.api.test.TestServer {
      * @param sslPort HTTPS port to bind on
      */
     public TestServer(int port, FakeApplication application, int sslPort) {
-        super(port, application.getWrappedApplication(), new Some(sslPort));
+        super(port, application.getWrappedApplication(), new Some(sslPort), System.getProperties()); // TODO: Support mocked Properties for Java
     }
 
 }

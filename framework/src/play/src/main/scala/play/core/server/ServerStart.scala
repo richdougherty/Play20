@@ -32,7 +32,9 @@ case class ServerConfig(
   address: String = "0.0.0.0",
   mode: Mode.Mode = Mode.Prod,
   properties: Properties // TODO: Enumerate individual config settings
-)
+) {
+  if (!port.isDefined && !sslPort.isDefined) throw new IllegalArgumentException("Must provide either an HTTP port or an HTTPS port")
+}
 
 /**
  * provides a stopable Server
