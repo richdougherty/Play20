@@ -7,7 +7,7 @@ import java.io.File
 import play.api.mvc._
 import play.api._
 import play.core._
-import scala.util.Success
+import scala.util.{ Success, Try }
 
 /**
  * Provides a very simple application that renders Play documentation.
@@ -28,7 +28,7 @@ case class DocumentationApplication(projectPath: File, buildDocHandler: BuildDoc
 
   override def path = projectPath
   override def get = Success(application)
-  override def handleWebCommand(request: RequestHeader) =
+  override def handleWebCommand(tryApp: Try[Application], request: RequestHeader) =
     buildDocHandler.maybeHandleDocRequest(request).asInstanceOf[Option[Result]].orElse(
       Some(Results.Redirect("/@documentation"))
     )

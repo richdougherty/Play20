@@ -10,6 +10,7 @@ import scala.util.{ Try, Success, Failure }
 
 import play.api._
 import play.api.mvc._
+import scala.concurrent.Future
 import scala.util.control.NonFatal
 
 /**
@@ -37,7 +38,25 @@ trait DevSettings {
 trait ApplicationProvider {
   def path: File
   def get: Try[Application]
-  def handleWebCommand(requestHeader: play.api.mvc.RequestHeader): Option[Result] = None
+  final def getProvided(): CurrentApplication = CurrentApplication(get)
+  def handleWebCommand(tryApp: Try[Application], requestHeader: play.api.mvc.RequestHeader): Option[Result] = None
+}
+
+
+case class CurrentApplication(
+  tryApplication: Try[Application]
+) {
+  def appDefined: Boolean = tryApplication.isSuccess
+
+  val global: GlobalSettings = tryApplication.map(_.global).getOrElse(DefaultGlobal)
+
+  /** Error handling to use during execution of a handler (e.g. an action) */
+  def handleHandlerError(rh: RequestHeader, t: Throwable): Future[Result] = {
+    tryApplication match {
+      case Success(app) => app.handleError(rh, t)
+      case Failure(_) => global.onError(rh, t)
+    }
+  }
 }
 
 trait HandleWebCommandSupport {
@@ -169,11 +188,11 @@ class ReloadableApplication(buildLink: BuildLink, buildDocHandler: BuildDocHandl
     }
   }
 
-  override def handleWebCommand(request: play.api.mvc.RequestHeader): Option[Result] = {
+  override def handleWebCommand(tryApp: Try[Application], request: play.api.mvc.RequestHeader): Option[Result] = {
 
     buildDocHandler.maybeHandleDocRequest(request).asInstanceOf[Option[Result]].orElse(
       for {
-        app <- Play.maybeApplication
+        app <- tryApp.toOption
         result <- app.plugins.foldLeft(Option.empty[Result]) {
           case (None, plugin: HandleWebCommandSupport) => plugin.handleWebCommand(request, buildLink, path)
           case (result, _) => result
@@ -182,5 +201,7 @@ class ReloadableApplication(buildLink: BuildLink, buildDocHandler: BuildDocHandl
     )
 
   }
+
+
 }
 

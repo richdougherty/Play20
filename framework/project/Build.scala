@@ -200,6 +200,10 @@ object PlayBuild extends Build {
   lazy val IterateesProject = PlayRuntimeProject("Play-Iteratees", "iteratees")
     .settings(libraryDependencies ++= iterateesDependencies)
 
+  lazy val StreamsProject = PlayRuntimeProject("Play-Streams", "play-streams")
+    .settings(libraryDependencies ++= streamsDependencies)
+    .dependsOn(IterateesProject)
+
   lazy val FunctionalProject = PlayRuntimeProject("Play-Functional", "play-functional")
 
   lazy val DataCommonsProject = PlayRuntimeProject("Play-DataCommons", "play-datacommons")
@@ -239,6 +243,10 @@ object PlayBuild extends Build {
   lazy val PlayNettyServerProject = PlayRuntimeProject("Play-Netty-Server", "play-netty-server")
     .settings(libraryDependencies ++= netty)
     .dependsOn(PlayServerProject)
+
+  lazy val PlayAkkaHttpServerProject = PlayRuntimeProject("Play-Akka-Http-Server", "play-akka-http-server")
+    .settings(libraryDependencies ++= akkaHttp)
+    .dependsOn(PlayServerProject, StreamsProject)
 
   lazy val PlayJdbcProject = PlayRuntimeProject("Play-JDBC", "play-jdbc")
     .settings(libraryDependencies ++= jdbcDeps)
@@ -402,6 +410,7 @@ object PlayBuild extends Build {
     DataCommonsProject,
     JsonProject,
     RoutesCompilerProject,
+    PlayAkkaHttpServerProject,
     PlayCacheProject,
     PlayJdbcProject,
     PlayJavaProject,
@@ -419,7 +428,8 @@ object PlayBuild extends Build {
     PlayDocsProject,
     PlayFiltersHelpersProject,
     PlayIntegrationTestProject,
-    PlayDocsSbtPlugin
+    PlayDocsSbtPlugin,
+    StreamsProject
   )
 
   lazy val Root = Project(

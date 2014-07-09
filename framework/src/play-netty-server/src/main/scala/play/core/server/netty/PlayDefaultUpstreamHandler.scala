@@ -25,10 +25,11 @@ import play.core.websocket._
 import scala.collection.JavaConverters._
 import scala.util.control.Exception
 import com.typesafe.netty.http.pipelining.{ OrderedDownstreamChannelEvent, OrderedUpstreamMessageEvent }
-import scala.concurrent.Future
 import java.net.URI
 import java.io.IOException
 import org.jboss.netty.handler.codec.http.websocketx.CloseWebSocketFrame
+import scala.concurrent.Future
+import scala.util.Try
 
 private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: DefaultChannelGroup) extends SimpleChannelUpstreamHandler with WebSocketHandler with RequestBodyHandler {
 
@@ -136,6 +137,8 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
           untaggedRequestHeader
         }
 
+        val tryApp: Try[Application] = server.applicationProvider.get
+
         val (requestHeader, handler: Either[Future[Result], (Handler, Application)]) = Exception
           .allCatch[RequestHeader].either {
             val rh = tryToCreateRequest
@@ -145,7 +148,7 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
           }.fold(
             e => {
               val rh = createRequestHeader()
-              val global = server.applicationProvider.get
+              val global = tryApp
                 .map(_.global)
                 .getOrElse(DefaultGlobal)
 
@@ -157,9 +160,9 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
                 }(play.api.libs.iteratee.Execution.trampoline)
               (rh, Left(result))
             },
-            rh => server.getHandlerFor(rh) match {
+            rh => server.getHandlerFor(tryApp, rh) match {
               case directResult @ Left(_) => (rh, directResult)
-              case Right((taggedRequestHeader, handler, application)) => (taggedRequestHeader, Right((handler, application)))
+              case Right((taggedRequestHeader, handler)) => (taggedRequestHeader, Right((handler, tryApp.get)))
             }
           )
 

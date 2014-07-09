@@ -122,6 +122,13 @@ object Dependencies {
     "com.typesafe.netty" % "netty-http-pipelining" % "1.1.2"
   )
 
+  val akkaHttp = Seq(
+    "com.typesafe.akka" %% "akka-http-core-experimental" % "0.4"
+  )
+
+  val link = Seq(
+    "org.javassist" % "javassist" % "3.18.2-GA")
+
   val routersCompilerDependencies =  Seq(
     "commons-io" % "commons-io" % "2.0.1"
   ) ++ specsBuild.map(_ % Test)
@@ -174,6 +181,13 @@ object Dependencies {
     "org.scala-stm" %% "scala-stm" % "0.7",
     typesafeConfig
   ) ++ specsBuild.map(_ % Test)
+
+  val streamsDependencies = Seq(
+    "org.reactivestreams" % "reactive-streams-spi" % "0.3",
+    mockitoAll % "test",
+    "org.reactivestreams" % "reactive-streams-tck" % "0.3" % "test",
+    "org.scalatest" %% "scalatest" % "2.2.0" % "test" // Needed for Reactive Streams TCK
+  ) ++ specsBuild.map(_ % "test")
 
   val jsonDependencies = Seq(
     jodatime,

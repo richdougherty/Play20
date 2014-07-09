@@ -19,6 +19,17 @@ trait WebSocketable {
   def check: Boolean
 }
 
+
+// final case class HandlerLookup(
+//   resultOrHandler: Either[Future[Result],Handler],
+//   errorHandling: ErrorHandling
+// )
+
+// trait ErrorHandling {
+//   def onError(request: RequestHeader, ex: Throwable): Future[Result]
+//   def onBadRequest(request: RequestHeader, error: String): Future[Result]
+// }
+
 /**
  * provides generic server behaviour for Play applications
  */
@@ -43,15 +54,35 @@ trait Server {
 
   def mode: Mode.Mode
 
-  def getHandlerFor(request: RequestHeader): Either[Future[Result], (RequestHeader, Handler, Application)] = {
+  // def getHandlerFor(request: RequestHeader): Either[Future[Result], (RequestHeader, Handler, Application)] = {
+  //   val currentApp = getTry[Application]
+  //   getHandlerFor(tryApplication, requestHeader).right.map {
+  //     case (rh, handler) => (rh, currentApp.)
+  //   }
+  // }
+
+  // def getHandlerFor(currentApp: TryApplication, request: RequestHeader): Either[Future[Result], (RequestHeader, Handler, Application)] = {
+  // }
+
+  // @deprecated
+  // def getHandlerFor(request: RequestHeader): Either[Future[Result], (RequestHeader, Handler, Application)] = {
+  //   val currentApp = getTry[Application]()
+  //   getHandlerFor(currentApp, request).right.map {
+  //     case (rh, h) =>
+  //       val app = currentApp.tryApplication.get // If we got a handler then there must be an application
+  //       (rh, h, app)
+  //   }
+  // }
+
+  def getHandlerFor(currentApp: Try[Application], request: RequestHeader): Either[Future[Result], (RequestHeader, Handler)] = {
 
     import scala.util.control.Exception
 
-    def sendHandler: Try[(RequestHeader, Handler, Application)] = {
+    def sendHandler: Try[(RequestHeader, Handler)] = {
       try {
-        applicationProvider.get.map { application =>
+        currentApp.map { application =>
           application.global.onRequestReceived(request) match {
-            case (requestHeader, handler) => (requestHeader, handler, application)
+            case (requestHeader, handler) => (requestHeader, handler)
           }
         }
       } catch {
@@ -77,9 +108,14 @@ trait Server {
 
     }
 
+
+    // if (currentApp.appDefined) {
+
+    // }
+
     Exception
       .allCatch[Option[Future[Result]]]
-      .either(applicationProvider.handleWebCommand(request).map(Future.successful))
+      .either(applicationProvider.handleWebCommand(currentApp, request).map(Future.successful))
       .left.map(logExceptionAndGetResult)
       .right.flatMap(maybeResult => maybeResult.toLeft(())).right.flatMap { _ =>
         sendHandler match {
