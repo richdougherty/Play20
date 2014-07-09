@@ -61,6 +61,11 @@
 1. [Configuration](https://github.com/typesafehub/config)
 1. [Logback](http://logback.qos.ch/documentation.html)
 
+## Experimental modules
+
+1. [[Akka HTTP Server backend|AkkaHttpServer]]
+1. [[Reactive Streams integration|ReactiveStreamsIntegration]]
+
 ## Hacking Play
 
 1. [[Building Play from source|BuildingFromSource]]
