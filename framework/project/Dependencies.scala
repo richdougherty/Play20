@@ -126,9 +126,6 @@ object Dependencies {
     "com.typesafe.akka" %% "akka-http-core-experimental" % "0.4"
   )
 
-  val link = Seq(
-    "org.javassist" % "javassist" % "3.18.2-GA")
-
   val routersCompilerDependencies =  Seq(
     "commons-io" % "commons-io" % "2.0.1"
   ) ++ specsBuild.map(_ % Test)
