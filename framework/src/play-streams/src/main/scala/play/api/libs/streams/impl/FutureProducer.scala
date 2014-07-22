@@ -9,59 +9,17 @@ import scala.annotation.unchecked.uncheckedVariance
 import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.{ Failure, Success, Try }
 
-final class FutureProducer[T](fut: Future[T]) extends Producer[T] with Publisher[T] {
+final class FutureProducer[T](fut: Future[T]) extends AbstractProducer[T,FutureProducerSubscription[T]] {
 
-  private val subscriptions = new AtomicReference[List[FutureProducerSubscription[T]]](Nil)
-
-  // Streams API methods
-  override def getPublisher: Publisher[T] = this
-  override def produceTo(consumer: Consumer[T]): Unit =
-    getPublisher.subscribe(consumer.getSubscriber)
-
-  // Streams SPI method
-  override def subscribe(sub: Subscriber[T]): Unit = {
-    val subscription = new FutureProducerSubscription(this, sub, fut)
-
-    @tailrec
-    def addSubscription(): Boolean = {
-      val oldSubscriptions = subscriptions.get
-      if (oldSubscriptions.exists(s => (s.sub eq sub) && s.isActive)) {
-        sub.onError(new IllegalStateException("Subscriber is already subscribed to this Producer"))
-        false
-      } else {
-        val newSubscriptions: List[FutureProducerSubscription[T]] = subscription::oldSubscriptions
-        if (subscriptions.compareAndSet(oldSubscriptions, newSubscriptions)) true else addSubscription()
-      }
+  override protected def createSubscription(sub: Subscriber[T]) = new FutureProducerSubscription(this, sub, fut)
+  override protected def onSubscriptionAdded(subscription: FutureProducerSubscription[T]): Unit = {
+    fut.value match {
+      case Some(Failure(t)) =>
+        subscription.subscriber.onError(t)
+        removeSubscription(subscription)
+      case _ =>
+        subscription.subscriber.onSubscribe(subscription)
     }
-
-    val subscribed = addSubscription()
-    if (subscribed) {
-      fut.value match {
-        case Some(Failure(t)) =>
-          sub.onError(t)
-          removeSubscription(subscription)
-        case _ =>
-          sub.onSubscribe(subscription)
-      }
-    }
-  }
-
-  @tailrec
-  def addSubscriptionUnlessActivelySubscribed(subscription: FutureProducerSubscription[T]): Boolean = {
-    val oldSubscriptions = subscriptions.get
-    if (oldSubscriptions.exists(s => (s.sub eq subscription.sub) && s.isActive)) {
-      false 
-    } else {
-      val newSubscriptions: List[FutureProducerSubscription[T]] = subscription::oldSubscriptions
-      if (subscriptions.compareAndSet(oldSubscriptions, newSubscriptions)) true else addSubscriptionUnlessActivelySubscribed(subscription)
-    }
-  }
-
-  @tailrec
-  def removeSubscription(subscription: FutureProducerSubscription[T]): Unit = {
-    val oldSubscriptions = subscriptions.get
-    val newSubscriptions = oldSubscriptions.filterNot(_.sub eq subscription.sub)
-    if (subscriptions.compareAndSet(oldSubscriptions, newSubscriptions)) () else removeSubscription(subscription)
   }
 
 }
@@ -74,7 +32,7 @@ private[streams] object FutureProducerSubscription {
   final case object Cancelled extends State
 }
 
-class FutureProducerSubscription[T](prod: FutureProducer[T], val sub: Subscriber[T], fut: Future[T]) extends Subscription {
+class FutureProducerSubscription[T](prod: FutureProducer[T], sub: Subscriber[T], fut: Future[T]) extends CheckableSubscription[T] {
   import FutureProducerSubscription._
   private val state = new AtomicReference[State](AwaitingRequest)
 
@@ -112,12 +70,14 @@ class FutureProducerSubscription[T](prod: FutureProducer[T], val sub: Subscriber
     handleState()
   }
 
-  def isActive: Boolean = {
+  override def isActive: Boolean = {
     state.get match {
       case AwaitingRequest | Requested => true
       case Cancelled | Completed => false
     }
   }
+
+  override def subscriber: Subscriber[T] = sub
 
   private def onFutureCompleted(result: Try[T]): Unit = {
     @tailrec

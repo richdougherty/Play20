@@ -8,6 +8,8 @@ import java.util.concurrent.atomic.AtomicReference
 import org.reactivestreams.api._
 import org.reactivestreams.spi._
 import play.api.libs.iteratee.Execution
+import play.api.libs.iteratee.Enumerator
+import play.api.libs.iteratee.Input
 import scala.annotation.tailrec
 import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.{ Failure, Success, Try }
@@ -20,7 +22,7 @@ import scala.util.Try
 import org.specs2.mock.Mockito
 //import org.mockito._
 
-class FutureProducerSpec extends Specification with Mockito {
+class EnumeratorProducerSpec extends Specification with Mockito {
 
   sealed trait Event
   case object GetSubscriber extends Event
@@ -32,7 +34,7 @@ class FutureProducerSpec extends Specification with Mockito {
   case object Cancel extends Event
   case object GetSubscription extends Event
 
-  class TestEnv[T](maxTime: ScalaFiniteDuration = ScalaFiniteDuration(10, SECONDS)) {
+  class TestEnv[T](maxTime: ScalaFiniteDuration = ScalaFiniteDuration(2, SECONDS)) {
     val events = new LinkedBlockingQueue[Event]
     def record(e: Event) = events.add(e)
 
@@ -82,60 +84,96 @@ class FutureProducerSpec extends Specification with Mockito {
   }
 
 
-  "FutureProducer" should {
-    "produce immediate success results" in {
+  "EnumeratorProducer" should {
+    "enumerate one item" in {
       val testEnv = new TestEnv[Int]
-      val fut = Future.successful(1)
-      val prod = new FutureProducer(fut)
+      val enum = Enumerator(1) >>> Enumerator.eof
+      val prod = new EnumeratorProducer(enum)
       prod.produceTo(testEnv.consumer)
       testEnv.next must_== GetSubscriber
       testEnv.next must_== OnSubscribe
       testEnv.requestMore(1)
       testEnv.next must_== RequestMore(1)
       testEnv.next must_== OnNext(1)
-      // testEnv.next must_== OnComplete
-      // testEnv.isEmptyAfterDelay() must beTrue
-    }
-    "produce immediate failure results" in {
-      val testEnv = new TestEnv[Int]
-      val e = new Exception("test failure")
-      val fut: Future[Int] = Future.failed(e)
-      val prod = new FutureProducer(fut)
-      prod.produceTo(testEnv.consumer)
-      testEnv.next must_== GetSubscriber
-      testEnv.next must_== OnError(e)
+      testEnv.requestMore(1)
+      testEnv.next must_== RequestMore(1)
+      testEnv.next must_== OnComplete
       testEnv.isEmptyAfterDelay() must beTrue
     }
-    "produce delayed success results" in {
+    "enumerate three items, with batched requestMores" in {
       val testEnv = new TestEnv[Int]
-      val prom = Promise[Int]()
-      val prod = new FutureProducer(prom.future)
+      val enum = Enumerator(1, 2, 3) >>> Enumerator.eof
+      val prod = new EnumeratorProducer(enum)
       prod.produceTo(testEnv.consumer)
       testEnv.next must_== GetSubscriber
       testEnv.next must_== OnSubscribe
-      testEnv.requestMore(1)
-      testEnv.next must_== RequestMore(1)
-      testEnv.isEmptyAfterDelay() must beTrue
-      prom.success(3)
+      testEnv.requestMore(2)
+      testEnv.next must_== RequestMore(2)
+      testEnv.next must_== OnNext(1)
+      testEnv.next must_== OnNext(2)
+      testEnv.requestMore(2)
+      testEnv.next must_== RequestMore(2)
       testEnv.next must_== OnNext(3)
       testEnv.next must_== OnComplete
       testEnv.isEmptyAfterDelay() must beTrue
     }
-    "produce delayed failure results" in {
+    "enumerate eof only" in {
       val testEnv = new TestEnv[Int]
-      val prom = Promise[Int]()
-      val prod = new FutureProducer(prom.future)
+      val enum: Enumerator[Int] = Enumerator.eof
+      val prod = new EnumeratorProducer(enum)
       prod.produceTo(testEnv.consumer)
       testEnv.next must_== GetSubscriber
       testEnv.next must_== OnSubscribe
       testEnv.requestMore(1)
       testEnv.next must_== RequestMore(1)
-      testEnv.isEmptyAfterDelay() must beTrue
-      val e = new Exception("test failure")
-      prom.failure(e)
-      testEnv.next must_== OnError(e)
+      testEnv.next must_== OnComplete
       testEnv.isEmptyAfterDelay() must beTrue
     }
-  }
+    "by default, enumerate nothing for empty" in {
+      val testEnv = new TestEnv[Int]
+      val enum: Enumerator[Int] = Enumerator.enumInput(Input.Empty) >>> Enumerator.eof
+      val prod = new EnumeratorProducer(enum)
+      prod.produceTo(testEnv.consumer)
+      testEnv.next must_== GetSubscriber
+      testEnv.next must_== OnSubscribe
+      testEnv.requestMore(1)
+      testEnv.next must_== RequestMore(1)
+      testEnv.next must_== OnComplete
+      testEnv.isEmptyAfterDelay() must beTrue
+    }
+    "be able to enumerate something for empty" in {
+      val testEnv = new TestEnv[Int]
+      val enum: Enumerator[Int] = Enumerator.enumInput(Input.Empty) >>> Enumerator.eof
+      val prod = new EnumeratorProducer(enum, emptyElement = Some(-1))
+      prod.produceTo(testEnv.consumer)
+      testEnv.next must_== GetSubscriber
+      testEnv.next must_== OnSubscribe
+      testEnv.requestMore(1)
+      testEnv.next must_== RequestMore(1)
+      testEnv.next must_== OnNext(-1)
+      testEnv.requestMore(1)
+      testEnv.next must_== RequestMore(1)
+      testEnv.next must_== OnComplete
+      testEnv.isEmptyAfterDelay() must beTrue
+    }
+    "enumerate 25 items" in {
+      val testEnv = new TestEnv[Int]
+      val lotsOfItems = 0 until 25
+      val enum = Enumerator(lotsOfItems: _*) >>> Enumerator.eof
+      val prod = new EnumeratorProducer(enum)
+      prod.produceTo(testEnv.consumer)
+      testEnv.next must_== GetSubscriber
+      testEnv.next must_== OnSubscribe
+      for (i <- lotsOfItems) {
+        testEnv.requestMore(1)
+        testEnv.next must_== RequestMore(1)
+        testEnv.next must_== OnNext(i)
+      }
+      testEnv.requestMore(1)
+      testEnv.next must_== RequestMore(1)
+      testEnv.next must_== OnComplete
+      testEnv.isEmptyAfterDelay() must beTrue
+    }
+ }
 
 }
