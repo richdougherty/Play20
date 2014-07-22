@@ -36,13 +36,11 @@ class EnumeratorProducerSubscription[T](prod: EnumeratorProducer[T], sub: Subscr
 
   // Use a RunQueue to implement a lock-free mutex
   private val runQueue = new LightRunQueue()
-  private def exclusive(debugMessage: => String)(f: State[T] => Unit) = runQueue.scheduleSimple {
-    println(s"$debugMessage [state = $state]")
+  private def exclusive(f: State[T] => Unit) = runQueue.scheduleSimple {
     f(state)
   }
 
   @volatile var state: State[T] = Requested[T](0, Unattached)
-  //println(s"construction: [state = $state]")
 
   override def subscriber: Subscriber[T] = sub
   override def isActive: Boolean = {
@@ -54,9 +52,8 @@ class EnumeratorProducerSubscription[T](prod: EnumeratorProducer[T], sub: Subscr
   }
 
   override def requestMore(elements: Int): Unit = {
-    //println(s"requestMore($elements) [state = $state]")
     if (elements <= 0) throw new IllegalArgumentException(s"The number of requested elements must be > 0: requested $elements elements")
-    exclusive(s"requestMore($elements)") {
+    exclusive {
       case Requested(0, its) =>
         state = Requested(elements, extendIteratee(its))
       case Requested(n, its) =>
@@ -66,14 +63,14 @@ class EnumeratorProducerSubscription[T](prod: EnumeratorProducer[T], sub: Subscr
     }
   }
 
-  override def cancel(): Unit = exclusive("cancel()") {
+  override def cancel(): Unit = exclusive {
     case Requested(_, _) =>
       state = Cancelled
     case Cancelled | Completed =>
       ()
   }
 
-  private def elementEnumerated(el: T): Unit = exclusive(s"elementEnumerated($el)") {
+  private def elementEnumerated(el: T): Unit = exclusive {
     case Requested(1, its) =>
       sub.onNext(el)
       state = Requested(0, its)
@@ -86,7 +83,7 @@ class EnumeratorProducerSubscription[T](prod: EnumeratorProducer[T], sub: Subscr
       throw new IllegalStateException("Shouldn't receive another element once completed")
   }
 
-  private def emptyEnumerated(): Unit = exclusive(s"emptyEnumerated()") {
+  private def emptyEnumerated(): Unit = exclusive {
     case Requested(n, its) =>
       state = Requested(n, extendIteratee(its))
     case Cancelled =>
@@ -95,7 +92,7 @@ class EnumeratorProducerSubscription[T](prod: EnumeratorProducer[T], sub: Subscr
       throw new IllegalStateException("Shouldn't receive an empty input once completed")
   }
 
-  private def eofEnumerated(): Unit = exclusive("eofEnumerated()") {
+  private def eofEnumerated(): Unit = exclusive {
     case Requested(_, _) =>
       sub.onComplete()
       state = Completed
@@ -106,11 +103,9 @@ class EnumeratorProducerSubscription[T](prod: EnumeratorProducer[T], sub: Subscr
   }
 
   private def extendIteratee(its: IterateeState[T]): IterateeState[T] = {
-    println(s"extendingIteratee($its)")
     val link = Promise[Iteratee[T, Unit]]()
     val linkIteratee: Iteratee[T, Unit] = Iteratee.flatten(link.future)
     val iteratee: Iteratee[T, Unit] = Cont { input =>
-      println(s"Iteratee got: $input")
       input match {
         case Input.El(el) =>
           elementEnumerated(el)
@@ -128,7 +123,6 @@ class EnumeratorProducerSubscription[T](prod: EnumeratorProducer[T], sub: Subscr
       case Unattached =>
         prod.enum(iteratee)
       case Attached(link0) =>
-        println(s"Linking new iteratee to old iteratee $link0")
         link0.success(iteratee)
     }
     Attached(link)

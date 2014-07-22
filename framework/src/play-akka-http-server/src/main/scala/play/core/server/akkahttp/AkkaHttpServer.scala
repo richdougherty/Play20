@@ -160,6 +160,12 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
     }.to[immutable.Seq]
   } 
 
+  def convertContentLength(
+    tryApp: Try[Application],
+    playHeaders: Map[String, String]): Option[Long] = {
+    playHeaders.get(HeaderNames.CONTENT_LENGTH).map(java.lang.Long.parseLong(_) /* FIXME: Better parsing */)
+  }
+
   def convertContentType(
     tryApp: Try[Application],
     playHeaders: Map[String, String]): model.ContentType = {
@@ -197,7 +203,6 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
     val actionIteratee: Iteratee[Array[Byte], Result] = action(taggedRequestHeader)
 
     val actionResultFuture: Future[Result] = requestBodyEnumerator |>>> actionIteratee
-
 
 // final class ResponseHeader(val status: Int, _headers: Map[String, String] = Map.empty) {
 //   val headers: Map[String, String] = TreeMap[String, String]()(CaseInsensitiveOrdered) ++ _headers
@@ -243,14 +248,44 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
   //  */
   // final case class Chunked(contentType: ContentType, chunks: Producer[ChunkStreamPart]) extends japi.HttpEntityChunked with Regular {
 
-    val responseFuture: Future[HttpResponse] = for {
-      result <- requestBodyEnumerator |>>> actionIteratee
-      resultBodyBytes <- result.body |>>> Iteratee.consume[Array[Byte]]()
-    } yield {
+    val resultFuture: Future[Result] = requestBodyEnumerator |>>> actionIteratee
+    val responseFuture: Future[HttpResponse] = resultFuture.map { result =>
+      val entity = {
+        val contentLength: Option[Long] = convertContentLength(tryApp, result.header.headers)
+        val contentType = convertContentType(tryApp, result.header.headers)
+        contentLength match {
+          case None =>
+            val chunksEnum = (
+              result.body.map(HttpEntity.ChunkStreamPart(_)) >>>
+              Enumerator.enumInput(Input.El(HttpEntity.LastChunk)) >>>
+              Enumerator.eof
+            )
+            val chunksProd = Streams.enumeratorToProducer(chunksEnum)
+            HttpEntity.Chunked(
+              contentType = contentType,
+              chunks = chunksProd
+            )
+          case Some(0) =>
+            HttpEntity.Strict(
+              contentType = contentType,
+              data = ByteString.empty
+            )
+          case Some(l) =>
+            val dataEnum: Enumerator[ByteString] = result.body.map(ByteString(_)) >>> Enumerator.eof
+            val dataProd: Producer[ByteString] = Streams.enumeratorToProducer(dataEnum)
+            // TODO: Check if values already available so we can use HttpEntity.Strict
+            HttpEntity.Default(
+              contentType = contentType,
+              contentLength = l,
+              data = dataProd
+            )
+          }
+      }
+
       HttpResponse(
         status = StatusCodes.OK,
         headers = convertResponseHeaders(tryApp, result.header.headers),
-        entity = HttpEntity.Strict(convertContentType(tryApp, result.header.headers), ByteString(resultBodyBytes)), // TODO: Perf with ByteString
+        entity = entity,
         protocol = model.HttpProtocols.`HTTP/1.1`)
     }
     Streams.futureToProducer(responseFuture)

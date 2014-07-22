@@ -1,6 +1,7 @@
 package play.api.libs.streams
 
 import org.reactivestreams.api._
+import play.api.libs.iteratee.Enumerator
 import scala.concurrent.{ ExecutionContext, Future, Promise }
 
 object Streams {
@@ -15,4 +16,5 @@ object Streams {
     val prom = Promise[T]
     (prom, futureToProducer(prom.future))
   }
+  def enumeratorToProducer[T](enum: Enumerator[T], emptyElement: Option[T] = None) = new impl.EnumeratorProducer(enum, emptyElement)
 }
