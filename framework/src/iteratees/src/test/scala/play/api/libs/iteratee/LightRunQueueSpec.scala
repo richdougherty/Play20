@@ -55,10 +55,20 @@ object LightRunQueueSpec extends Specification with ExecutionSpecification {
   "LightRunQueue" should {
 
     "run a single operation" in {
-      val p = Promise[Unit]()
+      val p = Promise[Int]()
       val rq = new LightRunQueue()
-      rq.scheduleSimple { p.success(()) }
-      Await.result(p.future, waitTime) must_== (())
+      rq.scheduleSimple { p.success(1) }
+      Await.result(p.future, waitTime) must_== (1)
+    }
+
+    "run two operations" in {
+      val p1 = Promise[Unit]()
+      val p2 = Promise[Unit]()
+      val rq = new LightRunQueue()
+      rq.scheduleSimple { p1.success(()) }
+      rq.scheduleSimple { p2.success(()) }
+      Await.result(p1.future, waitTime) must_== (())
+      Await.result(p2.future, waitTime) must_== (())
     }
 
     "run code in order" in {

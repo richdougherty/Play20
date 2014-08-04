@@ -11,204 +11,189 @@ import scala.util.{ Failure, Success, Try }
 
 private[streams] object IterateeConsumer {
 
-  sealed trait SubscriptionState[+T]
-  final case object AwaitingSubscription extends SubscriptionState[Nothing]
-  final case class Subscribed(subscription: Subscription) extends SubscriptionState[Nothing]
-  final case class CompleteOrErrorInputWaiting[T](input: Input[T]) extends SubscriptionState[T]
-  final case object CompleteOrError extends SubscriptionState[Nothing]
-  final case object Unsubscribed extends SubscriptionState[Nothing]
-
-  sealed trait IterateeState[T,R]
-  final case class AwaitingStep[T,R]() extends IterateeState[T,R]
-  final case class  AwaitingInput[T,R](k: Input[T] => Iteratee[T,R]) extends IterateeState[T,R]
-  final case class  Unneeded[T,R]() extends IterateeState[T,R]
-  final case class  DoneOrError[T,R]() extends IterateeState[T,R]
+  sealed trait State[T,R]
+  case class NotSubscribedNoStep[T,R](result: Promise[Iteratee[T,R]]) extends State[T,R]
+  case class SubscribedNoStep[T,R](subs: Subscription, result: Promise[Iteratee[T,R]]) extends State[T,R]
+  case class NotSubscribedWithCont[T,R](cont: Step.Cont[T,R], result: Promise[Iteratee[T,R]]) extends State[T,R]
+  case class SubscribedWithCont[T,R](subs: Subscription, cont: Step.Cont[T,R], result: Promise[Iteratee[T,R]]) extends State[T,R]
+  case class CompletedNoStep[T,R](result: Promise[Iteratee[T,R]]) extends State[T,R]
+  case class Finished[T,R](resultIteratee: Iteratee[T,R]) extends State[T,R]
 }
 
-class IterateeConsumer[T,R,S](
-  iter0: Iteratee[T,R],
-  doneStepResult: Step.Done[R,T] => Try[S],
-  errorStepResult: Step.Error[T] => Try[S],
-  onErrorInputAndResult: Throwable => (Option[Input[T]], Option[Try[S]])) extends Consumer[T] with Subscriber[T] {
+class IterateeConsumer[T,R,S](iter0: Iteratee[T,R]) extends Consumer[T] with Subscriber[T] {
   import IterateeConsumer._
 
   // Use a RunQueue to implement a lock-free mutex
   private val runQueue = new LightRunQueue()
-  private def exclusive(f: => Unit) = runQueue.scheduleSimple { f }
 
-  private var iterState: IterateeState[T,R] = AwaitingStep()
-  private var subState: SubscriptionState[T] = AwaitingSubscription
-  private val resultPromise = Promise[S]()
-
-  //private var state: State[T,R] = Initial
-
-  def result: Future[S] = resultPromise.future
-
+  var state: State[T,R] = NotSubscribedNoStep(Promise[Iteratee[T,R]]())
   getNextStepFromIteratee(iter0)
+
+
+  // private val runQueue = new LightRunQueue()
+  // private def exclusive(f: State[T, R] => Unit) = runQueue.scheduleSimple {
+  //   f(state)
+  // }
+
+  private def debug(msg: String) = ()//println(s"${Thread.currentThread}: $msg")
+
+  private def exclusive(msg: => String)(f: State[T, R] => Unit): Unit = {
+    runQueue.scheduleSimple {
+      debug(msg)
+      debug(s"State: $state")
+      f(state)
+      debug(s"   --> $state")
+    }
+    // debug(s"exclusive finished")
+  }
+
+  //exclusive((st: State[T, R]) => debug(s"harcoded call to exclusive: $st"))
+
+  def result: Iteratee[T,R] = state match {
+    case NotSubscribedNoStep(result) =>
+      promiseToIteratee(result)
+    case SubscribedNoStep(subs, result) =>
+      promiseToIteratee(result)
+    case NotSubscribedWithCont(cont, result) =>
+      promiseToIteratee(result)
+    case SubscribedWithCont(subs, cont, result) =>
+      promiseToIteratee(result)
+    case CompletedNoStep(result) =>
+      promiseToIteratee(result)
+    case Finished(resultIteratee) =>
+      resultIteratee
+  }
 
   // Streams API method
   override val getSubscriber: Subscriber[T] = this
 
   // Streams SPI methods
-  override def onSubscribe(subscription: Subscription): Unit = exclusive {
-    subState match {
-      case AwaitingSubscription =>
-        subState = Subscribed(subscription)
-      case illegal =>
-        throw new IllegalStateException("Consumer has already been subscribed")
-    }
-    iterState match {
-      case AwaitingStep() =>
-        () // We'll trigger an action once we know the iteratee's step
-      case AwaitingInput(k) =>
-        subscription.requestMore(1)
-      case Unneeded() =>
-        throw new IllegalStateException("Iteratee marked as unneeded before subscription has occurred")
-      case DoneOrError() =>
-        subscription.cancel()
-    }
+  override def onSubscribe(subs: Subscription): Unit = exclusive("onSubscribe") {
+    case NotSubscribedNoStep(result) =>
+      state = SubscribedNoStep(subs, result)
+    case SubscribedNoStep(subs, result) =>
+      throw new IllegalStateException("Can't subscribe twice")
+    case NotSubscribedWithCont(cont, result) =>
+      subs.requestMore(1)
+      state = SubscribedWithCont(subs, cont, result)
+    case SubscribedWithCont(subs, cont, result) =>
+      throw new IllegalStateException("Can't subscribe twice")
+    case CompletedNoStep(result) =>
+      throw new IllegalStateException("Can't subscribe once completed")
+    case Finished(resultIteratee) =>
+      subs.cancel()
+  }
+
+  override def onComplete(): Unit = exclusive("onComplete") {
+    case NotSubscribedNoStep(result) =>
+      state = CompletedNoStep(result)
+    case SubscribedNoStep(subs, result) =>
+      state = CompletedNoStep(result)
+    case NotSubscribedWithCont(cont, result) =>
+      finishWithCompletedCont(cont, result)
+    case SubscribedWithCont(subs, cont, result) =>
+      finishWithCompletedCont(cont, result)
+    case CompletedNoStep(result) =>
+      throw new IllegalStateException("Can't complete twice")
+    case Finished(resultIteratee) =>
+      ()
+  }
+
+  override def onError(cause: Throwable): Unit = exclusive("onError(...)") {
+    case NotSubscribedNoStep(result) =>
+      finishWithError(cause, result)
+    case SubscribedNoStep(subs, result) =>
+      finishWithError(cause, result)
+    case NotSubscribedWithCont(cont, result) =>
+      finishWithError(cause, result)
+    case SubscribedWithCont(subs, cont, result) =>
+      finishWithError(cause, result)
+    case CompletedNoStep(result) =>
+      throw new IllegalStateException("Can't receive error once completed")
+    case Finished(resultIteratee) =>
+      ()
+  }
+
+  override def onNext(element: T): Unit = exclusive(s"onNext($element)") {
+    case NotSubscribedNoStep(result) =>
+      throw new IllegalStateException("Got next element before subscribed")
+    case SubscribedNoStep(subs, result) =>
+      throw new IllegalStateException("Got next element before requested")
+    case NotSubscribedWithCont(cont, result) =>
+      throw new IllegalStateException("Got next element before subscribed")
+    case SubscribedWithCont(subs, cont, result) =>
+      continueWithNext(subs, cont, element, result)
+      // val nextIteratee = cont.k(Input.El(element))
+      // getNextStepFromIteratee(nextIteratee)
+      // state = SubscribedNoStep(subs, result)
+    case CompletedNoStep(result) =>
+      throw new IllegalStateException("Can't receive error once completed")
+    case Finished(resultIteratee) =>
+      ()
+  }
+
+  def continueWithNext(subs: Subscription, cont: Step.Cont[T,R], element: T, result: Promise[Iteratee[T,R]]): Unit = {
+    val nextIteratee = cont.k(Input.El(element))
+    getNextStepFromIteratee(nextIteratee)
+    state = SubscribedNoStep(subs, result)
+  }
+
+  private def onContStep(cont: Step.Cont[T,R]): Unit = exclusive("onContStep(...)") {
+    case NotSubscribedNoStep(result) =>
+      state = NotSubscribedWithCont(cont, result)
+    case SubscribedNoStep(subs, result) =>
+      subs.requestMore(1)
+      state = SubscribedWithCont(subs, cont, result)
+    case NotSubscribedWithCont(cont, result) =>
+      throw new IllegalStateException("Can't get cont twice")
+    case SubscribedWithCont(subs, cont, result) =>
+      throw new IllegalStateException("Can't get cont twice")
+    case CompletedNoStep(result) =>
+      finishWithCompletedCont(cont, result)
+    case Finished(resultIteratee) =>
+      ()
+  }
+
+  private def onDoneOrErrorStep(doneOrError: Step[T,R]): Unit = exclusive("onDoneOrErrorStep(...)") {
+    case NotSubscribedNoStep(result) =>
+      finishWithStep(doneOrError, result)
+    case SubscribedNoStep(subs, result) =>
+      finishWithStep(doneOrError, result)
+    case NotSubscribedWithCont(cont, result) =>
+      throw new IllegalStateException("Can't get done or error while has cont")
+    case SubscribedWithCont(subs, cont, result) =>
+      throw new IllegalStateException("Can't get done or error while has cont")
+    case CompletedNoStep(result) =>
+      finishWithStep(doneOrError, result)
+    case Finished(resultIteratee) =>
+      ()
   }
 
   private def getNextStepFromIteratee(iter: Iteratee[T,R]): Unit = {
-    iter0.pureFold {
-      case Step.Cont(k) => onContStep(k)
-      case d@Step.Done(_, _) => onDoneOrErrorStep(doneStepResult(d))
-      case e@Step.Error(_, _) => onDoneOrErrorStep(errorStepResult(e))
+    iter.pureFold {
+      case c@Step.Cont(_) => onContStep(c)
+      case d@Step.Done(_, _) => onDoneOrErrorStep(d)
+      case e@Step.Error(_, _) => onDoneOrErrorStep(e)
     }(Execution.trampoline)
   }
 
-  private def onContStep(k: Input[T] => Iteratee[T,R]): Unit = exclusive {
-    iterState match {
-      case AwaitingStep() =>
-        subState match {
-          case AwaitingSubscription =>
-            iterState = AwaitingInput(k)
-          case Subscribed(subscription) =>
-            subscription.requestMore(1)
-            iterState = AwaitingInput(k)
-          case CompleteOrErrorInputWaiting(input) =>
-            val iter = k(input)
-            getNextStepFromIteratee(iter)
-            iterState = Unneeded()
-            subState = CompleteOrError
-          case CompleteOrError | Unsubscribed =>
-            iterState = Unneeded()
-        }
-      case Unneeded() =>
-        ()
-      case illegal =>
-        throw new IllegalStateException(s"Iteratee state should have been AwaitingStep: $illegal")
-    }
+  private def promiseToIteratee(result: Promise[Iteratee[T,R]]) = Iteratee.flatten(result.future)
+
+  private def finishWithCompletedCont(cont: Step.Cont[T,R], result: Promise[Iteratee[T,R]]): Unit = {
+    val nextIteratee = cont.k(Input.EOF)
+    result.success(nextIteratee)
+    state = Finished(nextIteratee)
   }
 
-  private def onDoneOrErrorStep(r: Try[S]): Unit = exclusive {
-    iterState match {
-      case AwaitingStep() =>
-        subState match {
-          case AwaitingSubscription =>
-            iterState = AwaitingInput(k)
-          case Subscribed(subscription) =>
-            subscription.requestMore(1)
-            iterState = AwaitingInput(k)
-          case CompleteOrErrorInputWaiting(input) =>
-            val iter = k(input)
-            getNextStepFromIteratee(iter)
-            iterState = Unneeded()
-            subState = CompleteOrError
-          case CompleteOrError | Unsubscribed =>
-            iterState = Unneeded()
-        }
-
-        iterState = DoneOrError()
-      case Unneeded() =>
-        ()
-      case illegal =>
-        throw new IllegalStateException(s"Iteratee state should have been AwaitingStep: $illegal")
-    }
-    resultPromise.complete(r) // tryComplete?
-    subState match {
-      case Subscribed(subscription) =>
-        subscription.cancel()
-      case _ =>
-        ()
-    }
+  private def finishWithError(cause: Throwable, result: Promise[Iteratee[T,R]]): Unit = {
+    result.failure(cause)
+    state = Finished(promiseToIteratee(result))
   }
 
-  override def onError(cause: Throwable): Unit = exclusive {
-    subState match {
-      case AwaitingSubscription | Subscribed(_) =>
-        val (inputOpt, resultOpt) = onErrorInputAndResult(cause)
-        inputOpt match {
-          case None =>
-            subState = Unsubscribed
-          case Some(input) =>
-            iterState match {
-              case AwaitingStep() =>
-                subState = Completed(input)
-              case AwaitingInput(k) =>
-                val iter = k(input)
-                getNextStepFromIteratee(iter)
-                subState = Unsubscribed
-              case Unneeded() =>
-                throw new IllegalStateException("Iteratee marked as unneeded while subscription still active")
-              case DoneOrError() =>
-                ()
-            }
-        }
-        resultOpt.foreach { result: Try[S] =>
-          resultPromise.complete(result) // tryComplete?
-        }
-      case Completed(_) =>
-        throw new IllegalStateException("Subscriber can't get an error after subscription completed")
-      case Unsubscribed =>
-        ()
-    }
-  }
-
-  override def onComplete(): Unit = exclusive {
-    subState match {
-      case AwaitingSubscription | Subscribed(_) =>
-        iterState match {
-          case AwaitingStep() =>
-            subState = Completed(Input.EOF)
-          case AwaitingInput(k) =>
-            val iter = k(Input.EOF)
-            getNextStepFromIteratee(iter)
-            subState = Unsubscribed
-          case Unneeded() =>
-            throw new IllegalStateException("Iteratee marked as unneeded while subscription still active")
-          case DoneOrError() =>
-            ()
-        }
-      case Completed(_) =>
-        throw new IllegalStateException("Subscriber can't be completed twice")
-      case Unsubscribed =>
-        ()
-    }
-  }
-
-  override def onNext(element: T): Unit = exclusive {
-    subState match {
-      case AwaitingSubscription =>
-        throw new IllegalStateException("Subscriber received an element before it was subscribed")
-      case Subscribed(subscription) =>
-        iterState match {
-          case AwaitingStep() =>
-            throw new IllegalStateException("Subscriber received an element that it hadn't requested")
-          case AwaitingInput(k) =>
-            val iter = k(Input.El(element))
-            getNextStepFromIteratee(iter)
-            iterState = AwaitingStep[T,R]()
-          case Unneeded() =>
-            throw new IllegalStateException("Iteratee marked as unneeded while subscription still active")
-          case DoneOrError() =>
-            ()
-        }
-      case Completed(_) =>
-        throw new IllegalStateException("Subscriber can't get an element after subscription completed")
-      case Unsubscribed =>
-        ()
-    }
+  private def finishWithStep(step: Step[T,R], result: Promise[Iteratee[T,R]]): Unit = {
+    val nextIteratee = step.it
+    result.success(nextIteratee)
+    state = Finished(nextIteratee)
   }
 
 }
