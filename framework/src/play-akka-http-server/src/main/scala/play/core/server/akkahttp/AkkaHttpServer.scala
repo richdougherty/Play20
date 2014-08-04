@@ -17,7 +17,7 @@ import java.util.concurrent.Executors
 import org.reactivestreams.api._
 import play.api._
 import play.api.http.{ HeaderNames, MediaType }
-import play.api.libs.iteratee.{ Enumerator, Input, Iteratee, Done }
+import play.api.libs.iteratee.{ Enumeratee, Enumerator, Input, Iteratee, Done }
 import play.api.libs.streams.Streams
 import play.api.mvc._
 import play.core._
@@ -193,11 +193,19 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
     action: EssentialAction): Producer[HttpResponse] = {
 
     val requestBodyEnumerator: Enumerator[Array[Byte]] = request.entity match {
-      case HttpEntity.Strict(_, data) if data.isEmpty => Enumerator.eof
-      case HttpEntity.Default(_, 0, _) => Enumerator.eof
-      case HttpEntity.Strict(contentType, data) => ???
-      case HttpEntity.Default(contentType, contentLength, data) => ???
-      case HttpEntity.Chunked(contentType, chunkds) => ???
+      case HttpEntity.Strict(_, data) if data.isEmpty =>
+        Enumerator.eof
+      case HttpEntity.Strict(_, data) =>
+        Enumerator.apply[Array[Byte]](data.toArray) >>> Enumerator.eof
+      case HttpEntity.Default(_, 0, _) =>
+        Enumerator.eof
+      case HttpEntity.Default(contentType, contentLength, prod) =>
+        // FIXME: should do something with the content-length?
+        Streams.producerToEnumerator(prod) &> Enumeratee.map((data: ByteString) => data.toArray)
+      case HttpEntity.Chunked(contentType, chunks) =>
+        // FIXME: Don't enumerate LastChunk?
+        // FIXME: do something with trailing headers?
+        Streams.producerToEnumerator(chunks) &> Enumeratee.map((chunk: HttpEntity.ChunkStreamPart) => chunk.data.toArray)
     }
 
     val actionIteratee: Iteratee[Array[Byte], Result] = action(taggedRequestHeader)

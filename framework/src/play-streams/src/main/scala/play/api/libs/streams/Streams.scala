@@ -23,5 +23,8 @@ object Streams {
     (cons, resultIter)
   }
 
-  def enumeratorToProducer[T](enum: Enumerator[T], emptyElement: Option[T] = None) = new impl.EnumeratorProducer(enum, emptyElement)
+  def enumeratorToProducer[T](enum: Enumerator[T], emptyElement: Option[T] = None): Producer[T] =
+    new impl.EnumeratorProducer(enum, emptyElement)
+  def producerToEnumerator[T](prod: Producer[T]): Enumerator[T] =
+    new impl.ProducerEnumerator(prod)
 }
