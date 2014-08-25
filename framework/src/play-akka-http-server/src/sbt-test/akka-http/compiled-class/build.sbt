@@ -1,19 +1,18 @@
 lazy val root = (project in file(".")).enablePlugins(PlayScala)
 
-name := "system-property"
+name := "compiled-class"
 
 scalaVersion := Option(System.getProperty("scala.version")).getOrElse("2.10.4")
 
-// because the "test" directory clashes with the scripted test file
+// Change our tests directory because the usual "test" directory clashes
+// with the scripted "test" file.
 scalaSource in Test <<= baseDirectory(_ / "tests")
 
 libraryDependencies += "com.typesafe.play" %% "play-akka-http-server-experimental" % sys.props("project.version")
 
 libraryDependencies += ws
 
-fork in Test := true
-
-javaOptions in Test += "-Dserver.provider=play.core.server.akkahttp.AkkaHttpServerProvider"
+mainClass in Compile := Some("play.core.server.akkahttp.AkkaHttpServer")
 
 PlayKeys.playInteractionMode := play.StaticPlayNonBlockingInteractionMode
 
