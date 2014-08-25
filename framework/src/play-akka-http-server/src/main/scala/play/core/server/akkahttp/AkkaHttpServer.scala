@@ -69,7 +69,7 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
   private def handleRequest(remoteAddress: InetSocketAddress, request: HttpRequest): Publisher[HttpResponse] = {
     val tryApp = applicationProvider.get
     val requestId = requestIDs.incrementAndGet()
-    val convertedRequestHeader = ModelConversion.convertRequest(
+    val (convertedRequestHeader, requestBodyEnumerator) = ModelConversion.convertRequest(
       requestId,
       remoteAddress,
       request)
@@ -78,6 +78,7 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
       newTryApp,
       request,
       taggedRequestHeader,
+      requestBodyEnumerator,
       handler
     )
     responsePublisher
@@ -105,6 +106,7 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
     tryApp: Try[Application],
     request: HttpRequest,
     taggedRequestHeader: RequestHeader,
+    requestBodyEnumerator: Enumerator[Array[Byte]],
     handler: Handler): Publisher[HttpResponse] = handler match {
     //execute normal action
     case action: EssentialAction =>
@@ -117,7 +119,7 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
             ): Iteratee[Array[Byte], Result]
         })
       }
-      executeAction(tryApp, request, taggedRequestHeader, actionWithErrorHandling)
+      executeAction(tryApp, request, taggedRequestHeader, requestBodyEnumerator, actionWithErrorHandling)
     case unhandled => sys.error(s"AkkaHttpServer doesn't handle Handlers of this type: $unhandled")
   }
 
@@ -137,6 +139,7 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
     tryApp: Try[Application],
     request: HttpRequest,
     taggedRequestHeader: RequestHeader,
+    requestBodyEnumerator: Enumerator[Array[Byte]],
     action: EssentialAction): Publisher[HttpResponse] = {
 
     import play.api.libs.iteratee.Execution.Implicits.trampoline

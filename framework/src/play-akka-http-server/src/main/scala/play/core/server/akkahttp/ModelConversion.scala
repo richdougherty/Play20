@@ -1,41 +1,40 @@
 package play.core.server.akkahttp
 
-// import akka.actor.ActorSystem
-// import akka.http.Http
-import akka.http.model.ContentType
-// import akka.http.model.HttpMethods.GET
 import akka.http.model._
-import akka.http.model.HttpEntity._
-import akka.http.model.headers.{ `Content-Type`, `Content-Length`, RawHeader }
+import akka.http.model.ContentType
+import akka.http.model.headers._
 import akka.http.model.parser.HeaderParser
-// import akka.http.util.Rendering
-// import akka.io.IO
-// import akka.pattern.ask
-// import akka.stream.scaladsl.Flow
-// import akka.stream.{ FlattenStrategy, MaterializerSettings, FlowMaterializer }
 import akka.util.ByteString
-// import com.typesafe.config.{ ConfigFactory, Config }
 import java.net.InetSocketAddress
-// import java.util.concurrent.Executors
 import org.reactivestreams.Publisher
-// import play.api._
-// import play.api.http.{ HeaderNames, MediaType }
-import play.api.http.HeaderNames._
-import play.api.libs.iteratee.{ Enumeratee, Enumerator, Input, Iteratee, Done }
+import play.api.libs.iteratee.{ Enumeratee, Enumerator, Input }
 import play.api.libs.streams.Streams
 import play.api.mvc._
-// import play.core._
-// import play.core.server._
-// import play.server.SSLEngineProvider
 import scala.collection.immutable
-// import scala.concurrent.Future
-// import scala.concurrent.duration._
-// import scala.util.{ Failure, Success, Try }
-// import scala.util.control.NonFatal
 
-object ModelConversion {
+/**
+ * Conversions between Akka's and Play's HTTP model objects.
+ */
+private[akkahttp] object ModelConversion {
 
+  /**
+   * Convert an Akka `HttpRequest` to a `RequestHeader` and an `Eumerator`
+   * for its body.
+   */
   def convertRequest(
+    requestId: Long,
+    remoteAddress: InetSocketAddress,
+    request: HttpRequest): (RequestHeader, Enumerator[Array[Byte]]) = {
+    (
+      convertRequestHeader(requestId, remoteAddress, request),
+      convertRequestBody(request)
+    )
+  }
+
+  /**
+   * Convert an Akka `HttpRequest` to a `RequestHeader`.
+   */
+  private def convertRequestHeader(
     requestId: Long,
     remoteAddress: InetSocketAddress,
     request: HttpRequest): RequestHeader = {
@@ -43,10 +42,9 @@ object ModelConversion {
     // Taken from PlayDefaultUpstreamHander
     new RequestHeader {
       val id = requestId
-      // Send a tag so we can find out which server we're using
-      // in our tests. We're not sending an equivalent tag for
-      // with our Netty server backend because the act of sending
-      // a tag might make performance slightly lower.
+      // Send a tag so our tests can tell which kind of server we're using.
+      // We could get NettyServer to send a similar tag, but for the moment
+      // let's not, just in case it slows NettyServer down a bit.
       val tags = Map("HTTP_SERVER" -> "akka-http")
       def uri = request.uri.toString
       def path = request.uri.path.toString
@@ -56,11 +54,15 @@ object ModelConversion {
       val headers = convertRequestHeaders(request)
       def remoteAddress = remoteHostAddress
       def secure = false // FIXME: Stub
-      def username = ??? // None
+      def username = ??? // FIXME: Stub
     }
   }
 
-  def convertRequestHeaders(request: HttpRequest): Headers = {
+  /**
+   * Convert the request headers of an Akka `HttpRequest` to a Play
+   * `Headers` object.
+   */
+  private def convertRequestHeaders(request: HttpRequest): Headers = {
     val entityHeaders: Seq[HttpHeader] = request.entity match {
       case HttpEntity.Strict(contentType, _) =>
         Seq(`Content-Type`(contentType))
@@ -76,33 +78,32 @@ object ModelConversion {
     }
   }
 
-  case class AkkaHttpHeaders(
-    misc: immutable.Seq[HttpHeader],
-    contentType: Option[ContentType],
-    contentLength: Option[Long])
-
-  def convertResponseHeaders(
-    playHeaders: Map[String, String]): AkkaHttpHeaders = {
-    val rawHeaders = playHeaders.map { case (name, value) => RawHeader(name, value) }
-    val convertedHeaders: List[HttpHeader] = HeaderParser.parseHeaders(rawHeaders.to[List]) match {
-      case (Nil, headers) => headers
-      case (errors, _) => sys.error(s"Error parsing response headers: $errors")
+  /**
+   * Convert an Akka `HttpRequest` to an `Enumerator` of the request body.
+   */
+  private def convertRequestBody(
+    request: HttpRequest): Enumerator[Array[Byte]] = {
+    import play.api.libs.iteratee.Execution.Implicits.trampoline
+    request.entity match {
+      case HttpEntity.Strict(_, data) if data.isEmpty =>
+        Enumerator.eof
+      case HttpEntity.Strict(_, data) =>
+        Enumerator.apply[Array[Byte]](data.toArray) >>> Enumerator.eof
+      case HttpEntity.Default(_, 0, _) =>
+        Enumerator.eof
+      case HttpEntity.Default(contentType, contentLength, pubr) =>
+        // FIXME: should do something with the content-length?
+        Streams.publisherToEnumerator(pubr) &> Enumeratee.map((data: ByteString) => data.toArray)
+      case HttpEntity.Chunked(contentType, chunks) =>
+        // FIXME: Don't enumerate LastChunk?
+        // FIXME: do something with trailing headers?
+        Streams.publisherToEnumerator(chunks) &> Enumeratee.map((chunk: HttpEntity.ChunkStreamPart) => chunk.data.toArray)
     }
-    AkkaHttpHeaders(
-      misc = convertedHeaders.filter {
-        case _: `Content-Type` => false
-        case _: `Content-Length` => false
-        case _ => true
-      },
-      contentType = convertedHeaders.collectFirst {
-        case ct: `Content-Type` => ct.contentType
-      },
-      contentLength = convertedHeaders.collectFirst {
-        case cl: `Content-Length` => cl.length
-      }
-    )
   }
 
+  /**
+   * Convert a Play `Result` object into an Akka `HttpResponse` object.
+   */
   def convertResult(
     result: Result): HttpResponse = {
     val convertedHeaders: AkkaHttpHeaders = convertResponseHeaders(result.header.headers)
@@ -144,6 +145,47 @@ object ModelConversion {
       headers = convertedHeaders.misc,
       entity = entity,
       protocol = HttpProtocols.`HTTP/1.1`) // FIXME
+  }
+
+  /**
+   * A representation of Akka HTTP headers separate from an `HTTPMessage`.
+   * Akka HTTP treats some headers specially and these are split out into
+   * separate values.
+   *
+   * @misc General headers. Guaranteed not to contain any of the special
+   * headers stored in the other values.
+   * @contentType If present, the value of the `Content-Type` header.
+   * @contentLength If present, the value of the `Content-Length` header.
+   */
+  case class AkkaHttpHeaders(
+    misc: immutable.Seq[HttpHeader],
+    contentType: Option[ContentType],
+    contentLength: Option[Long])
+
+  /**
+   * Convert Play response headers into `HttpHeader` objects, then separate
+   * out any special headers.
+   */
+  private def convertResponseHeaders(
+    playHeaders: Map[String, String]): AkkaHttpHeaders = {
+    val rawHeaders = playHeaders.map { case (name, value) => RawHeader(name, value) }
+    val convertedHeaders: List[HttpHeader] = HeaderParser.parseHeaders(rawHeaders.to[List]) match {
+      case (Nil, headers) => headers
+      case (errors, _) => sys.error(s"Error parsing response headers: $errors")
+    }
+    AkkaHttpHeaders(
+      misc = convertedHeaders.filter {
+        case _: `Content-Type` => false
+        case _: `Content-Length` => false
+        case _ => true
+      },
+      contentType = convertedHeaders.collectFirst {
+        case ct: `Content-Type` => ct.contentType
+      },
+      contentLength = convertedHeaders.collectFirst {
+        case cl: `Content-Length` => cl.length
+      }
+    )
   }
 
 }
