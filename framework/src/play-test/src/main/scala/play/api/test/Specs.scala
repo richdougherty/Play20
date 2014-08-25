@@ -30,7 +30,8 @@ abstract class WithApplication(val app: FakeApplication = FakeApplication()) ext
  *
  * @param app The fake application
  * @param port The port to run the server on
- * @param serverProvider *Experimental* The type of server to use. Defaults to Netty.
+ * @param serverProvider *Experimental API; subject to change* The type of
+ * server to use. Defaults to providing a Netty server.
  */
 abstract class WithServer(
     val app: FakeApplication = FakeApplication(),

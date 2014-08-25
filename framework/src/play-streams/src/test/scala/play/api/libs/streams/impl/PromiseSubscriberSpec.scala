@@ -5,9 +5,8 @@ package play.api.libs.streams.impl
 
 import org.reactivestreams._
 import org.specs2.mutable.Specification
-import play.api.libs.iteratee._
 import scala.concurrent.duration.{ FiniteDuration => ScalaFiniteDuration, SECONDS }
-import scala.concurrent.{ Await, ExecutionContext, Future, Promise }
+import scala.concurrent.{ Future, Promise }
 import scala.util.{ Failure, Success, Try }
 
 class PromiseSubscriberSpec extends Specification {
@@ -17,10 +16,6 @@ class PromiseSubscriberSpec extends Specification {
   case class OnComplete(result: Try[Any])
 
   class TestEnv[T] extends EventRecorder(ScalaFiniteDuration(2, SECONDS)) {
-
-    @volatile
-    var nextIterateePromise = Promise[Iteratee[T, T]]()
-    def nextIteratee = Iteratee.flatten(nextIterateePromise.future)
 
     val prom = Promise[T]()
     val subr = new PromiseSubscriber(prom)

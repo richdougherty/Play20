@@ -3,12 +3,9 @@
  */
 package play.api.libs.streams
 
-import org.reactivestreams._
 import play.api.libs.streams.impl._
 import org.specs2.mutable.Specification
-import play.api.libs.iteratee.{ Enumerator, Input }
-import scala.concurrent.duration.{ FiniteDuration => ScalaFiniteDuration, SECONDS, MILLISECONDS }
-import scala.concurrent.{ ExecutionContext, Future, Promise }
+import scala.concurrent.Future
 
 class StreamsSpec extends Specification {
 

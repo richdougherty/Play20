@@ -14,6 +14,9 @@ import scala.util.control.NonFatal
  *
  * @param port HTTP port to bind on.
  * @param application The FakeApplication to load in this server.
+ * @param sslPort HTTPS port to bind on.
+ * @param serverProvider *Experimental API; subject to change* The type of
+ * server to use. Defaults to providing a Netty server.
  */
 case class TestServer(
     port: Int,
@@ -58,13 +61,13 @@ case class TestServer(
 
 }
 
-object TestServer {
+private[play] object TestServer {
 
   /**
    * Start a TestServer with the given config and application. To stop it,
    * call `shutdown` on the returned TestServerProcess.
    */
-  private[play] def start(
+  def start(
     testServerProvider: ServerProvider,
     config: ServerConfig,
     application: FakeApplication): TestServerProcess = {
@@ -89,7 +92,7 @@ object TestServer {
  * When the process is finished, call `shutdown()` to run all registered
  * shutdown hooks.
  */
-class TestServerProcess extends ServerProcess {
+private[play] class TestServerProcess extends ServerProcess {
 
   private var hooks = Seq.empty[() => Unit]
   override def addShutdownHook(hook: => Unit) = {
@@ -110,7 +113,7 @@ class TestServerProcess extends ServerProcess {
 
 }
 
-case class TestServerExitException(
+private[play] case class TestServerExitException(
   message: String,
   cause: Option[Throwable] = None,
   returnCode: Int = -1) extends Exception(s"Exit with $message, $cause, $returnCode", cause.orNull)
