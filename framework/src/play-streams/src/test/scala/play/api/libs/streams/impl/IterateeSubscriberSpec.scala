@@ -12,7 +12,7 @@ import scala.util.{ Failure, Success, Try }
 
 class IterateeSubscriberSpec extends Specification {
 
-  case class RequestMore(elementCount: Int)
+  case class RequestMore(elementCount: Long)
   case object Cancel
   case class ContInput(input: Input[_])
   case class Result(result: Any)
@@ -59,12 +59,12 @@ class IterateeSubscriberSpec extends Specification {
           record(Cancel)
         }
 
-        def request(elements: Int): Unit = {
+        def request(elements: Long): Unit = {
           record(RequestMore(elements))
         }
       }
-      override def subscribe(s: Subscriber[T]) = {
-        subscription.subscriber.success(s)
+      override def subscribe(s: Subscriber[_ >: T]) = {
+        subscription.subscriber.success(s.asInstanceOf[Subscriber[T]])
       }
     }
 

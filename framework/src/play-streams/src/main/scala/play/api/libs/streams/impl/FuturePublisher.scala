@@ -65,7 +65,7 @@ private[streams] class FuturePublisherSubscription[T](pubr: FuturePublisher[T], 
 
   // Streams methods
 
-  override def request(elements: Int): Unit = {
+  override def request(elements: Long): Unit = {
     if (elements <= 0) throw new IllegalArgumentException(s"The number of requested elements must be > 0: requested $elements elements")
     exclusive {
       case AwaitingRequest =>

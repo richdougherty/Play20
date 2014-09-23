@@ -40,8 +40,8 @@ private[streams] abstract class AbstractPublisher[T, S <: CheckableSubscription[
   private val subscriptions = new AtomicReference[List[S]](Nil)
 
   // Streams method
-  final override def subscribe(subr: Subscriber[T]): Unit = {
-    val subscription = createSubscription(subr)
+  final override def subscribe(subr: Subscriber[_ >: T]): Unit = {
+    val subscription = createSubscription(subr.asInstanceOf[Subscriber[T]])
 
     @tailrec
     def addSubscription(): Unit = {

@@ -1,3 +1,6 @@
+/*
+ * Copyright (C) 2009-2014 Typesafe Inc. <http://www.typesafe.com>
+ */
 package play.core.server.akkahttp
 
 import akka.actor.ActorSystem
@@ -7,7 +10,7 @@ import akka.http.model.headers.{ `Content-Length`, `Content-Type` }
 import akka.io.IO
 import akka.pattern.ask
 import akka.stream.scaladsl.Flow
-import akka.stream.{ FlattenStrategy, MaterializerSettings, FlowMaterializer }
+import akka.stream.FlowMaterializer
 import akka.util.{ ByteString, Timeout }
 import com.typesafe.config.{ ConfigFactory, Config }
 import java.net.InetSocketAddress
@@ -43,7 +46,7 @@ class AkkaHttpServer(config: ServerConfig, appProvider: ApplicationProvider) ext
 
     // Bind the sockt
     import system.dispatcher
-    implicit val materializer = FlowMaterializer(MaterializerSettings())
+    implicit val materializer = FlowMaterializer()
 
     val bindingFuture = {
       import java.util.concurrent.TimeUnit.MILLISECONDS

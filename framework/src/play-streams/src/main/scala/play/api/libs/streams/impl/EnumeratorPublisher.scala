@@ -32,7 +32,7 @@ private[streams] object EnumeratorPublisherSubscription {
    * @param attached The attached Iteratee we're using to read from the
    * Enumerator. Will be Unattached until the first element is requested.
    */
-  final case class Requested[T](n: Int, attached: IterateeState[T]) extends State[T]
+  final case class Requested[T](n: Long, attached: IterateeState[T]) extends State[T]
   /**
    * A Subscription completed by the Publisher.
    */
@@ -80,7 +80,7 @@ private[streams] class EnumeratorPublisherSubscription[T](pubr: EnumeratorPublis
 
   // Streams methods
 
-  override def request(elements: Int): Unit = {
+  override def request(elements: Long): Unit = {
     if (elements <= 0) throw new IllegalArgumentException(s"The number of requested elements must be > 0: requested $elements elements")
     exclusive {
       case Requested(0, its) =>

@@ -63,18 +63,18 @@ private[akkahttp] object ModelConversion {
    * `Headers` object.
    */
   private def convertRequestHeaders(request: HttpRequest): Headers = {
-    val entityHeaders: Seq[HttpHeader] = request.entity match {
+    val mainHeaders: scala.collection.Seq[(String, String)] = request.headers.map((rh: HttpHeader) => (rh.name, rh.value))
+    val entityHeaders: Seq[(String, String)] = request.entity match {
       case HttpEntity.Strict(contentType, _) =>
-        Seq(`Content-Type`(contentType))
+        Seq(("Content-Type", contentType.toString))
       case HttpEntity.Default(contentType, contentLength, _) =>
-        Seq(`Content-Type`(contentType), `Content-Length`(contentLength))
+        Seq(("Content-Type", contentType.toString), ("Content-Length", contentLength.toString))
       case HttpEntity.Chunked(contentType, _) =>
-        Seq(`Content-Type`(contentType))
+        Seq(("Content-Type", contentType.toString))
     }
-    val allHeaders: Seq[HttpHeader] = request.headers ++ entityHeaders
-    val pairs: scala.collection.Seq[(String, String)] = allHeaders.map((rh: HttpHeader) => (rh.name, rh.value))
+    val allHeaders: Seq[(String, String)] = mainHeaders ++ entityHeaders
     new Headers {
-      val data: Seq[(String, Seq[String])] = pairs.groupBy(_._1).mapValues(_.map(_._2)).to[Seq]
+      val data: Seq[(String, Seq[String])] = allHeaders.groupBy(_._1).mapValues(_.map(_._2)).to[Seq]
     }
   }
 
