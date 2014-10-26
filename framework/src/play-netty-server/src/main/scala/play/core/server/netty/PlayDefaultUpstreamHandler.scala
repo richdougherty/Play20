@@ -21,6 +21,7 @@ import play.api.libs.iteratee._
 import play.api.libs.iteratee.Input._
 import play.core.server.Server
 import play.core.websocket._
+import play.utils.{ Lazy, UnsynchronizedLazy }
 import scala.collection.JavaConverters._
 import scala.util.control.Exception
 import com.typesafe.netty.http.pipelining.{ OrderedDownstreamChannelEvent, OrderedUpstreamMessageEvent }
@@ -88,17 +89,20 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
         val nettyUri = new QueryStringDecoder(nettyHttpRequest.getUri)
         val rHeaders = getHeaders(nettyHttpRequest)
 
-        def rRemoteAddress = e.getRemoteAddress match {
-          case ra: java.net.InetSocketAddress =>
-            val remoteAddress = ra.getAddress.getHostAddress
-            forwardedHeader(remoteAddress, X_FORWARDED_FOR).getOrElse(remoteAddress)
+        val lazyRemoteHostAddress = UnsynchronizedLazy[String] {
+          e.getRemoteAddress match {
+            case ra: java.net.InetSocketAddress =>
+              ra.getAddress.getHostAddress
+          }
         }
 
-        def rSecure = e.getRemoteAddress match {
-          case ra: java.net.InetSocketAddress =>
-            val remoteAddress = ra.getAddress.getHostAddress
-            val fh = forwardedHeader(remoteAddress, X_FORWARDED_PROTO)
-            fh.map(_ == "https").getOrElse(ctx.getPipeline.get(classOf[SslHandler]) != null)
+        def rLazyRemoteAddress: Lazy[String] = lazyRemoteHostAddress.map { remoteAddress =>
+          forwardedHeader(remoteAddress, X_FORWARDED_FOR).getOrElse(remoteAddress)
+        }
+
+        def rLazySecure: Lazy[Boolean] = lazyRemoteHostAddress.map { remoteAddress =>
+          val fh = forwardedHeader(remoteAddress, X_FORWARDED_PROTO)
+          fh.map(_ == "https").getOrElse(ctx.getPipeline.get(classOf[SslHandler]) != null)
         }
 
         /**
@@ -120,17 +124,18 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
         def createRequestHeader(parameters: Map[String, Seq[String]] = Map.empty[String, Seq[String]]) = {
           //mapping netty request to Play's
           val untaggedRequestHeader = new RequestHeader {
-            val id = requestIDs.incrementAndGet
-            val tags = Map.empty[String, String]
-            def uri = nettyHttpRequest.getUri
-            def path = new URI(nettyUri.getPath).getRawPath //wrapping into URI to handle absoluteURI
-            def method = nettyHttpRequest.getMethod.getName
-            def version = nettyVersion.getText
-            def queryString = parameters
-            def headers = rHeaders
-            lazy val remoteAddress = rRemoteAddress
-            lazy val secure = rSecure
-            def username = None
+            override val id = requestIDs.incrementAndGet
+            override val tags = Map.empty[String, String]
+            override def uri = nettyHttpRequest.getUri
+            override def path = new URI(nettyUri.getPath).getRawPath //wrapping into URI to handle absoluteURI
+            override def method = nettyHttpRequest.getMethod.getName
+            override def version = nettyVersion.getText
+            override def queryString = parameters
+            override def headers = rHeaders
+            override def remoteAddress = lazyRemoteAddress.get
+            override val lazyRemoteAddress = rLazyRemoteAddress
+            override def secure = lazySecure.get
+            override val lazySecure = rLazySecure
           }
           untaggedRequestHeader
         }

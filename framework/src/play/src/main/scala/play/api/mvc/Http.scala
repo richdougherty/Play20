@@ -8,6 +8,7 @@ package play.api.mvc {
   import play.api.i18n.Lang
   import play.api.libs.iteratee._
   import play.api.libs.Crypto
+  import play.utils.{ EvaluatedLazy, Lazy, UnsynchronizedLazy }
 
   import scala.annotation._
   import scala.util.control.NonFatal
@@ -70,6 +71,8 @@ package play.api.mvc {
      */
     def remoteAddress: String
 
+    private[play] val lazyRemoteAddress: Lazy[String] = new UnsynchronizedLazy(() => remoteAddress)
+
     /**
      * Is the client using SSL?
      *
@@ -78,6 +81,8 @@ package play.api.mvc {
      * <code>trustxforwarded</code> is configured to be true in the application configuration file.
      */
     def secure: Boolean
+
+    private[play] val lazySecure: Lazy[Boolean] = new UnsynchronizedLazy(() => secure)
 
     // -- Computed
 
@@ -174,16 +179,47 @@ package play.api.mvc {
       secure: Boolean = this.secure): RequestHeader = {
       val (_id, _tags, _uri, _path, _method, _version, _queryString, _headers, _remoteAddress, _secure) = (id, tags, uri, path, method, version, queryString, headers, remoteAddress, secure)
       new RequestHeader {
-        val id = _id
-        val tags = _tags
-        val uri = _uri
-        val path = _path
-        val method = _method
-        val version = _version
-        val queryString = _queryString
-        val headers = _headers
-        val remoteAddress = _remoteAddress
-        val secure = _secure
+        override val id = _id
+        override val tags = _tags
+        override val uri = _uri
+        override val path = _path
+        override val method = _method
+        override val version = _version
+        override val queryString = _queryString
+        override val headers = _headers
+        override val remoteAddress = _remoteAddress
+        override val secure = _secure
+      }
+    }
+
+    /**
+     * Copy the request, preserving lazy values.
+     */
+    private[play] def lazyCopy(
+      id: Long = this.id,
+      tags: Map[String, String] = this.tags,
+      uri: String = this.uri,
+      path: String = this.path,
+      method: String = this.method,
+      version: String = this.version,
+      queryString: Map[String, Seq[String]] = this.queryString,
+      headers: Headers = this.headers,
+      lazyRemoteAddress: Lazy[String] = this.lazyRemoteAddress,
+      lazySecure: Lazy[Boolean] = this.lazySecure): RequestHeader = {
+      val (_id, _tags, _uri, _path, _method, _version, _queryString, _headers, _lazyRemoteAddress, _lazySecure) = (id, tags, uri, path, method, version, queryString, headers, lazyRemoteAddress, lazySecure)
+      new RequestHeader {
+        override val id = _id
+        override val tags = _tags
+        override val uri = _uri
+        override val path = _path
+        override val method = _method
+        override val version = _version
+        override val queryString = _queryString
+        override val headers = _headers
+        override def remoteAddress = lazyRemoteAddress.get
+        override val lazyRemoteAddress = _lazyRemoteAddress
+        override def secure = lazySecure.get
+        override val lazySecure = _lazySecure
       }
     }
 
@@ -260,7 +296,6 @@ package play.api.mvc {
       def headers = rh.headers
       lazy val remoteAddress = rh.remoteAddress
       lazy val secure = rh.secure
-      def username = None
       val body = a
     }
   }

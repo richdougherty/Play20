@@ -217,7 +217,7 @@ object Router {
 
   private def taggedRequest(rh: RequestHeader, tags: Map[String, String]): RequestHeader = {
     val newTags = if (rh.tags.isEmpty) tags else rh.tags ++ tags
-    rh.copy(tags = newTags)
+    rh.lazyCopy(tags = newTags)
   }
 
   object HandlerInvokerFactory {
