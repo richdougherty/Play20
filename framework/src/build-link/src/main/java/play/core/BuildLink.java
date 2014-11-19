@@ -15,7 +15,21 @@ import java.util.*;
  * communication can work even when the plugin and embedded Play server are
  * built with different versions of Scala.
  */
+// Created by PlayReloader, used by PlayRun, supplied to NettyServer when started
+// in dev mode.
 public interface BuildLink {
+
+    // PLAN: Replaces reload. Change to use a callback once the basic
+    // logic is figured out.
+    BuildResult buildIfChanged();
+
+    // interface Callback {
+    //   void success(BuildResult buildResult);
+    //   void failure(Throwable t);
+    // }
+
+    // 
+    // add close method()
 
     /**
      * Check if anything has changed, and if so, return an updated classloader.
@@ -31,6 +45,7 @@ public interface BuildLink {
      *     <li>null - If nothing changed.</li>
      * </ul>
      */
+    // PLAN: Replace by buildIfChanged.
     public Object reload();
 
     /**
@@ -55,6 +70,9 @@ public interface BuildLink {
      *     <li>null - If no source file could be found for the class name.</li>
      * </ul>
      */
+    // PLAN: We're going to need this, or something like it, so that
+    // we can look up sources for displaying errors. See
+    // ApplicationProvider and SourceMapper class.
     public Object[] findSource(String className, Integer line);
 
     /**
@@ -62,6 +80,8 @@ public interface BuildLink {
      *
      * @return The path of the project.
      */
+    // PLAN: Put this into a config object that is supplied to the
+    // server when it starts. It doesn't vary on each build.
     public File projectPath();
 
     /**
@@ -70,6 +90,9 @@ public interface BuildLink {
      * This is invoked by plugins for example that change something on the classpath or something about the application
      * that requires a reload, for example, the evolutions plugin.
      */
+    // PLAN: Move up a layer. When the new build() command is working it will
+    // return a classpath. Whatever calls build() can reload this classpath
+    // at any time. This method won't be needed.
     public void forceReload();
 
     /**
@@ -77,6 +100,8 @@ public interface BuildLink {
      *
      * @return The settings.
      */
+    // PLAN: Put this into a config object that is supplied to the
+    // server when it starts. It doesn't vary on each build.
     public Map<String,String> settings();
 
     /**
@@ -91,5 +116,7 @@ public interface BuildLink {
      * @param task The name of the task to run.
      * @return The result of running the task.
      */
+    // PLAN: Remove this. In Play 2.4 maybe we can provide a module that
+    // gives a handle directly to sbt server.
     public Object runTask(String task);
 }

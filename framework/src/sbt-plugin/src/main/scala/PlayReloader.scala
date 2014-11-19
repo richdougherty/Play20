@@ -10,6 +10,7 @@ import play.api._
 import play.core._
 import sbt._
 import sbt.Keys._
+import scala.concurrent.{ Future, Promise }
 import play.PlayImport._
 import PlayKeys._
 import PlayExceptions._
@@ -62,6 +63,55 @@ trait PlayReloader {
         changed = true
       })
       private val classLoaderVersion = new java.util.concurrent.atomic.AtomicInteger(0)
+
+      def buildIfChanged(): BuildResult = play.Play.synchronized {
+          if (changed || forceReloadNextTime || currentAnalysis.isEmpty
+            || currentApplicationClassLoader.isEmpty) {
+
+            val shouldReload = forceReloadNextTime
+
+            changed = false
+            forceReloadNextTime = false
+
+            // Run the reload task, which will trigger everything to compile
+            Project.runTask(playReload, state).map(_._2).get.toEither
+              .left.map(taskFailureHandler)
+              .right.map { compilationResult =>
+
+                currentAnalysis = Some(compilationResult)
+
+                // Calculate the classpath
+                Project.runTask(classpathTask, state).map(_._2).get.toEither
+                  .left.map(taskFailureHandler)
+                  .right.map { classpath =>
+
+                    // We only want to reload if the classpath has changed.  Assets don't live on the classpath, so
+                    // they won't trigger a reload.
+                    // Use the SBT watch service, passing true as the termination to force it to break after one check
+                    val (_, newState) = SourceModificationWatch.watch(classpath.files.***, 0, watchState)(true)
+                    // SBT has a quiet wait period, if that's set to true, sources were modified
+                    val triggered = newState.awaitingQuietPeriod
+                    watchState = newState
+
+                    if (triggered || shouldReload || currentApplicationClassLoader.isEmpty) {
+
+                      // Create a new classloader
+                      val version = classLoaderVersion.incrementAndGet
+                      val name = "ReloadableClassLoader(v" + version + ")"
+                      val urls = Path.toURLs(classpath.files)
+                      val loader = createClassLoader(name, urls, baseLoader)
+                      currentApplicationClassLoader = Some(loader)
+                      loader
+                    } else {
+                      null // null means nothing changed
+                    }
+                  }.fold(identity, identity)
+              }.fold(identity, identity)
+          } else {
+            null // null means nothing changed
+          }
+        }
+      }
 
       /**
        * Contrary to its name, this doesn't necessarily reload the app.  It is invoked on every request, and will only
