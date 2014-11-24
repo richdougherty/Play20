@@ -325,10 +325,10 @@ trait PlayRun extends PlayInternalKeys {
         }
         if (httpPort.isDefined) {
           val mainDev = mainClass.getMethod("mainDevHttpMode", classOf[DevModeConfig], classOf[Int])
-          mainDev.invoke(null, reloader, httpPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
+          mainDev.invoke(null, devModeConfig, httpPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
         } else {
           val mainDev = mainClass.getMethod("mainDevOnlyHttpsMode", classOf[DevModeConfig], classOf[Int])
-          mainDev.invoke(null, reloader, httpsPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
+          mainDev.invoke(null, devModeConfig, httpsPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
         }
       }
 
