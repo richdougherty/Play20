@@ -5,7 +5,8 @@ package play.api.db.evolutions
 
 import java.io._
 
-import play.core._
+import play.core.HandleWebCommandSupport
+import play.core.buildlink.application.ApplicationBuildLink
 
 import play.api._
 import play.api.db._
@@ -569,7 +570,7 @@ class EvolutionsPlugin(app: Application) extends Plugin with HandleWebCommandSup
     ignoring(classOf[SQLException])(c.close())
   }
 
-  def handleWebCommand(request: play.api.mvc.RequestHeader, buildLink: play.core.BuildLink, path: java.io.File): Option[play.api.mvc.Result] = {
+  def handleWebCommand(request: play.api.mvc.RequestHeader, applicationBuildLink: ApplicationBuildLink, path: java.io.File): Option[play.api.mvc.Result] = {
 
     val applyEvolutions = """/@evolutions/apply/([a-zA-Z0-9_]+)""".r
     val resolveEvolutions = """/@evolutions/resolve/([a-zA-Z0-9_]+)/([0-9]+)""".r
@@ -582,7 +583,7 @@ class EvolutionsPlugin(app: Application) extends Plugin with HandleWebCommandSup
         Some {
           val script = Evolutions.evolutionScript(dbApi, app.path, app.classloader, db)
           Evolutions.applyScript(dbApi, db, script, autocommit)
-          buildLink.forceReload()
+          applicationBuildLink.forceReload()
           play.api.mvc.Results.Redirect(redirectUrl)
         }
       }
@@ -590,7 +591,7 @@ class EvolutionsPlugin(app: Application) extends Plugin with HandleWebCommandSup
       case resolveEvolutions(db, rev) => {
         Some {
           Evolutions.resolve(dbApi, db, rev.toInt)
-          buildLink.forceReload()
+          applicationBuildLink.forceReload()
           play.api.mvc.Results.Redirect(redirectUrl)
         }
       }

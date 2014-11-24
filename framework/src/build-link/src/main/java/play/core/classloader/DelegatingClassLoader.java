@@ -17,9 +17,10 @@ public class DelegatingClassLoader extends ClassLoader {
   private static final List<String> buildSharedClasses;
   static {
     List<String> list = new ArrayList<String>();
-    list.add(play.core.BuildLink.class.getName());
-    list.add(play.core.BuildDocHandler.class.getName());
-    list.add(play.core.server.ServerWithStop.class.getName());
+    list.add(play.core.buildlink.application.ApplicationBuildLink.class.getName());
+    list.add(play.core.buildlink.application.BuildDocHandler.class.getName());
+    list.add(play.core.buildlink.application.DevModeConfig.class.getName());
+    list.add(play.core.buildlink.application.DevModeServer.class.getName());
     list.add(play.api.UsefulException.class.getName());
     list.add(play.api.PlayException.class.getName());
     list.add(play.api.PlayException.InterestingLines.class.getName());

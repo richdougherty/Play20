@@ -10,6 +10,7 @@ import scala.util.{ Try, Success, Failure }
 
 import play.api._
 import play.api.mvc._
+import play.core.buildlink.application._
 import scala.util.control.NonFatal
 
 /**
@@ -41,7 +42,7 @@ trait ApplicationProvider {
 }
 
 trait HandleWebCommandSupport {
-  def handleWebCommand(request: play.api.mvc.RequestHeader, buildLink: play.core.BuildLink, path: java.io.File): Option[Result]
+  def handleWebCommand(request: play.api.mvc.RequestHeader, applicationBuildLink: ApplicationBuildLink, path: java.io.File): Option[Result]
 }
 
 /**
@@ -73,7 +74,7 @@ class TestApplication(application: Application) extends ApplicationProvider {
 /**
  * Represents an application that can be reloaded in Dev Mode.
  */
-class ReloadableApplication(buildLink: BuildLink, buildDocHandler: BuildDocHandler) extends ApplicationProvider {
+class ReloadableApplication(devModeConfig: DevModeConfig) extends ApplicationProvider {
 
   // Use plain Java call here in case of scala classloader mess
   {
@@ -100,7 +101,7 @@ class ReloadableApplication(buildLink: BuildLink, buildDocHandler: BuildDocHandl
     Map("application.home" -> path.getAbsolutePath),
     mode = Mode.Dev)
 
-  lazy val path = buildLink.projectPath
+  lazy val path = devModeConfig.projectPath
 
   println(play.utils.Colors.magenta("--- (Running the application from SBT, auto-reloading is enabled) ---"))
   println()
@@ -119,7 +120,7 @@ class ReloadableApplication(buildLink: BuildLink, buildDocHandler: BuildDocHandl
       implicit val ec = play.core.Execution.internalContext
       Await.result(scala.concurrent.Future {
 
-        val reloaded = buildLink.reload match {
+        val reloaded = devModeConfig.applicationBuildLink.reload match {
           case NonFatal(t) => Failure(t)
           case cl: ClassLoader => Success(Some(cl))
           case null => Success(None)
@@ -143,7 +144,7 @@ class ReloadableApplication(buildLink: BuildLink, buildDocHandler: BuildDocHandl
 
               val newApplication = new DefaultApplication(reloadable.path, projectClassloader, Some(new SourceMapper {
                 def sourceOf(className: String, line: Option[Int]) = {
-                  Option(buildLink.findSource(className, line.map(_.asInstanceOf[java.lang.Integer]).orNull)).flatMap {
+                  Option(devModeConfig.applicationBuildLink.findSource(className, line.map(_.asInstanceOf[java.lang.Integer]).orNull)).flatMap {
                     case Array(file: java.io.File, null) => Some((file, None))
                     case Array(file: java.io.File, line: java.lang.Integer) => Some((file, Some(line)))
                     case _ => None
@@ -151,7 +152,7 @@ class ReloadableApplication(buildLink: BuildLink, buildDocHandler: BuildDocHandl
                 }
               }), Mode.Dev) with DevSettings {
                 import scala.collection.JavaConverters._
-                lazy val devSettings: Map[String, String] = buildLink.settings.asScala.toMap
+                lazy val devSettings: Map[String, String] = devModeConfig.settings.asScala.toMap
               }
 
               Play.start(newApplication)
@@ -186,11 +187,11 @@ class ReloadableApplication(buildLink: BuildLink, buildDocHandler: BuildDocHandl
 
   override def handleWebCommand(request: play.api.mvc.RequestHeader): Option[Result] = {
 
-    buildDocHandler.maybeHandleDocRequest(request).asInstanceOf[Option[Result]].orElse(
+    devModeConfig.buildDocHandler.maybeHandleDocRequest(request).asInstanceOf[Option[Result]].orElse(
       for {
         app <- Play.maybeApplication
         result <- app.plugins.foldLeft(Option.empty[Result]) {
-          case (None, plugin: HandleWebCommandSupport) => plugin.handleWebCommand(request, buildLink, path)
+          case (None, plugin: HandleWebCommandSupport) => plugin.handleWebCommand(request, devModeConfig.applicationBuildLink, path)
           case (result, _) => result
         }
       } yield result

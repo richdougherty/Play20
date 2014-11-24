@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
  */
-package play.core;
+package play.core.buildlink;
 
 import java.io.*;
 import java.util.*;
@@ -18,18 +18,6 @@ import java.util.*;
 // Created by PlayReloader, used by PlayRun, supplied to NettyServer when started
 // in dev mode.
 public interface BuildLink {
-
-    // PLAN: Replaces reload. Change to use a callback once the basic
-    // logic is figured out.
-    BuildResult buildIfChanged();
-
-    // interface Callback {
-    //   void success(BuildResult buildResult);
-    //   void failure(Throwable t);
-    // }
-
-    // 
-    // add close method()
 
     /**
      * Check if anything has changed, and if so, return an updated classloader.

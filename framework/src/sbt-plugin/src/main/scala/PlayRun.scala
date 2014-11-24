@@ -11,7 +11,7 @@ import Keys._
 import play.PlayImport._
 import PlayKeys._
 import play.sbtplugin.Colors
-import play.core.{ BuildLink, BuildDocHandler }
+import play.core.buildlink.application._
 import play.core.classloader._
 import annotation.tailrec
 import scala.collection.JavaConverters._
@@ -141,7 +141,7 @@ trait PlayRun extends PlayInternalKeys {
           case Some(watched) =>
             // ~ run mode
             interaction doWithoutEcho {
-              twiddleRunMonitor(watched, state, devModeServer.buildLink, Some(WatchState.empty))
+              twiddleRunMonitor(watched, state, Some(WatchState.empty))
             }
           case None =>
             // run mode
@@ -157,7 +157,7 @@ trait PlayRun extends PlayInternalKeys {
    * Monitor changes in ~run mode.
    */
   @tailrec
-  private def twiddleRunMonitor(watched: Watched, state: State, reloader: BuildLink, ws: Option[WatchState] = None): Unit = {
+  private def twiddleRunMonitor(watched: Watched, state: State, ws: Option[WatchState] = None): Unit = {
     val ContinuousState = AttributeKey[WatchState]("watch state", "Internal: tracks state for continuous execution.")
     def isEOF(c: Int): Boolean = c == 4
 
@@ -195,7 +195,7 @@ trait PlayRun extends PlayInternalKeys {
       Thread.sleep(Watched.PollDelayMillis)
 
       // Call back myself
-      twiddleRunMonitor(watched, newState, reloader, Some(newWatchState))
+      twiddleRunMonitor(watched, newState, Some(newWatchState))
     } else {
       ()
     }
@@ -205,7 +205,7 @@ trait PlayRun extends PlayInternalKeys {
    * Play dev server
    */
   private trait PlayDevServer extends Closeable {
-    val buildLink: BuildLink
+    // val buildLink: BuildLink
   }
 
   /**
@@ -292,7 +292,7 @@ trait PlayRun extends PlayInternalKeys {
     lazy val applicationLoader = dependencyClassLoader("PlayDependencyClassLoader", urls(dependencyClasspath), delegatingLoader)
     lazy val assetsLoader = assetsClassLoader(applicationLoader)
 
-    lazy val reloader = newReloader(state, playReload, reloaderClassLoader, reloaderClasspathTask, assetsLoader,
+    lazy val reloader: PlayBuildLink = newReloader(state, playReload, reloaderClassLoader, reloaderClasspathTask, assetsLoader,
       monitoredFiles, playWatchService)
 
     try {
@@ -306,20 +306,29 @@ trait PlayRun extends PlayInternalKeys {
         val f = docsClasspath.map(_.data).filter(_.getName.startsWith("play-docs")).head
         new JarFile(f)
       }
-      val buildDocHandler = {
-        val docHandlerFactoryClass = docsLoader.loadClass("play.docs.BuildDocHandlerFactory")
-        val factoryMethod = docHandlerFactoryClass.getMethod("fromJar", classOf[JarFile], classOf[String])
-        factoryMethod.invoke(null, docsJarFile, "play/docs/content").asInstanceOf[BuildDocHandler]
-      }
-
       val server = {
         val mainClass = applicationLoader.loadClass("play.core.server.NettyServer")
+        val devModeConfig = new DevModeConfig {
+          override val applicationBuildLink = new ApplicationBuildLink {
+            override def reload(): java.lang.Object = reloader.reload()
+            override def forceReload(): Unit = reloader.forceReload()
+            override def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] =
+              reloader.findSource(className, line)
+          }
+          override val buildDocHandler: BuildDocHandler = {
+            val docHandlerFactoryClass = docsLoader.loadClass("play.docs.BuildDocHandlerFactory")
+            val factoryMethod = docHandlerFactoryClass.getMethod("fromJar", classOf[JarFile], classOf[String])
+            factoryMethod.invoke(null, docsJarFile, "play/docs/content").asInstanceOf[BuildDocHandler]
+          }
+          override val projectPath: File = reloader.projectPath
+          override val settings: java.util.Map[String, String] = reloader.settings
+        }
         if (httpPort.isDefined) {
-          val mainDev = mainClass.getMethod("mainDevHttpMode", classOf[BuildLink], classOf[BuildDocHandler], classOf[Int])
-          mainDev.invoke(null, reloader, buildDocHandler, httpPort.get: java.lang.Integer).asInstanceOf[play.core.server.ServerWithStop]
+          val mainDev = mainClass.getMethod("mainDevHttpMode", classOf[DevModeConfig], classOf[Int])
+          mainDev.invoke(null, reloader, httpPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
         } else {
-          val mainDev = mainClass.getMethod("mainDevOnlyHttpsMode", classOf[BuildLink], classOf[BuildDocHandler], classOf[Int])
-          mainDev.invoke(null, reloader, buildDocHandler, httpsPort.get: java.lang.Integer).asInstanceOf[play.core.server.ServerWithStop]
+          val mainDev = mainClass.getMethod("mainDevOnlyHttpsMode", classOf[DevModeConfig], classOf[Int])
+          mainDev.invoke(null, reloader, httpsPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
         }
       }
 

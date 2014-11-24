@@ -8,7 +8,8 @@ import play.api.http.Status
 import play.api.http.HeaderNames
 import play.api.libs.iteratee.Enumerator
 import play.api.libs.iteratee.Enumeratee
-import play.core.{ PlayVersion, BuildDocHandler }
+import play.core.PlayVersion
+import play.core.buildlink.application.BuildDocHandler
 import play.doc.{ FileRepository, PlayDoc, RenderedPage }
 import org.apache.commons.io.IOUtils
 

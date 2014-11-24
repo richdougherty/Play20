@@ -15,6 +15,7 @@ import javax.net.ssl._
 import java.util.concurrent._
 
 import play.core._
+import play.core.buildlink.application._
 import play.api._
 import play.core.server.netty._
 
@@ -24,17 +25,9 @@ import com.typesafe.netty.http.pipelining.HttpPipeliningHandler
 import play.server.SSLEngineProvider
 
 /**
- * provides a stopable Server
- */
-trait ServerWithStop {
-  def stop(): Unit
-  def mainAddress: InetSocketAddress
-}
-
-/**
  * creates a Server implementation based Netty
  */
-class NettyServer(appProvider: ApplicationProvider, port: Option[Int], sslPort: Option[Int] = None, address: String = "0.0.0.0", val mode: Mode.Mode = Mode.Prod) extends Server with ServerWithStop {
+class NettyServer(appProvider: ApplicationProvider, port: Option[Int], sslPort: Option[Int] = None, address: String = "0.0.0.0", val mode: Mode.Mode = Mode.Prod) extends Server with DevModeServer {
 
   require(port.isDefined || sslPort.isDefined, "Neither http.port nor https.port is specified")
 
@@ -290,8 +283,8 @@ object NettyServer {
    * <p>This method uses simple Java types so that it can be used with reflection by code
    * compiled with different versions of Scala.
    */
-  def mainDevOnlyHttpsMode(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpsPort: Int): NettyServer = {
-    mainDev(buildLink, buildDocHandler, None, Some(httpsPort))
+  def mainDevOnlyHttpsMode(devModeConfig: DevModeConfig, httpsPort: Int): NettyServer = {
+    mainDev(devModeConfig, None, Some(httpsPort))
   }
 
   /**
@@ -300,14 +293,14 @@ object NettyServer {
    * <p>This method uses simple Java types so that it can be used with reflection by code
    * compiled with different versions of Scala.
    */
-  def mainDevHttpMode(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpPort: Int): NettyServer = {
-    mainDev(buildLink, buildDocHandler, Some(httpPort), Option(System.getProperty("https.port")).map(Integer.parseInt(_)))
+  def mainDevHttpMode(devModeConfig: DevModeConfig, httpPort: Int): NettyServer = {
+    mainDev(devModeConfig, Some(httpPort), Option(System.getProperty("https.port")).map(Integer.parseInt(_)))
   }
 
-  private def mainDev(buildLink: BuildLink, buildDocHandler: BuildDocHandler, httpPort: Option[Int], httpsPort: Option[Int]): NettyServer = {
+  private def mainDev(devModeConfig: DevModeConfig, httpPort: Option[Int], httpsPort: Option[Int]): NettyServer = {
     play.utils.Threads.withContextClassLoader(this.getClass.getClassLoader) {
       try {
-        val appProvider = new ReloadableApplication(buildLink, buildDocHandler)
+        val appProvider = new ReloadableApplication(devModeConfig)
         new NettyServer(appProvider, httpPort,
           httpsPort,
           mode = Mode.Dev)

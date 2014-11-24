@@ -5,7 +5,7 @@ package play.docs
 
 import java.io.File
 import play.api.Mode
-import play.core.BuildDocHandler
+import play.core.buildlink.application.BuildDocHandler
 import play.core.server.NettyServer
 
 /**

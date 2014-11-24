@@ -6,8 +6,7 @@ package com.typesafe.play.docs.sbtplugin
 import java.util.jar.JarFile
 
 import com.typesafe.play.docs.sbtplugin.PlayDocsValidation.MarkdownReport
-import play.core.BuildDocHandler
-import play.core.server.ServerWithStop
+import play.core.buildlink.application.{ BuildDocHandler, DevModeServer }
 import play.sbtplugin.Colors
 import sbt.Keys._
 import sbt._
@@ -74,7 +73,7 @@ object PlayDocsPlugin extends AutoPlugin {
 
     val clazz = classloader.loadClass("play.docs.DocumentationServer")
     val constructor = clazz.getConstructor(classOf[File], classOf[BuildDocHandler], classOf[java.lang.Integer])
-    val server = constructor.newInstance(manualPath.value, buildDocHandler, new java.lang.Integer(port)).asInstanceOf[ServerWithStop]
+    val server = constructor.newInstance(manualPath.value, buildDocHandler, new java.lang.Integer(port)).asInstanceOf[DevModeServer]
 
     println()
     println(Colors.green("Documentation server started, you can now view the docs by going to http://" + server.mainAddress()))

@@ -7,7 +7,7 @@ import java.io.File;
 import java.util.jar.JarFile;
 
 import play.api.mvc.RequestHeader;
-import play.core.BuildDocHandler;
+import play.core.buildlink.application.BuildDocHandler;
 import play.doc.FileRepository;
 import play.doc.FilesystemRepository;
 import play.doc.JarRepository;

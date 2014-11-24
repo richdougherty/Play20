@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2009-2014 Typesafe Inc. <http://www.typesafe.com>
  */
-package play.core;
+package play.core.buildlink.sbt;
 
-public class SameBuild implements BuildResult {}
+public interface BuildResult {
+}

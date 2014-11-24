@@ -6,7 +6,8 @@ package play.docs
 import java.io.File
 import play.api.mvc._
 import play.api._
-import play.core._
+import play.core.ApplicationProvider
+import play.core.buildlink.application.BuildDocHandler
 import scala.util.Success
 
 /**

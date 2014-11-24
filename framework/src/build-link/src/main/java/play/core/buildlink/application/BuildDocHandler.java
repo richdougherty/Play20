@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2009-2013 Typesafe Inc. <http://www.typesafe.com>
  */
-package play.core;
+package play.core.buildlink.application;
 
 /**
  * Interface used by the build to call a DocumentationHandler. We don't use
