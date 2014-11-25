@@ -313,7 +313,7 @@ trait PlayRun extends PlayInternalKeys {
             override def reload(): java.lang.Object = reloader.applicationLink.reload()
             override def forceReload(): Unit = reloader.applicationLink.forceReload()
             override def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] =
-              reloader.findSource(className, line)
+              reloader.applicationLink.findSource(className, line)
           }
           override val buildDocHandler: BuildDocHandler = {
             val docHandlerFactoryClass = docsLoader.loadClass("play.docs.BuildDocHandlerFactory")
