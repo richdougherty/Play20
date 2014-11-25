@@ -148,8 +148,25 @@ trait PlayReloader {
           SameBuild
         }
 
-        def getProblems(incomplete: Incomplete): Seq[xsbti.Problem] = {
-          (allProblems(incomplete) ++ {
+        private def getProblems(incomplete: Incomplete): Seq[xsbti.Problem] = {
+          def remapProblemForGeneratedSources(problem: xsbti.Problem) = {
+            val mappedPosition = playPositionMapper(problem.position)
+            mappedPosition.map { pos =>
+              new xsbti.Problem {
+                def message = problem.message
+                def category = ""
+                def position = pos
+                def severity = problem.severity
+              }
+            } getOrElse problem
+          }
+
+          val exceptionProblems: Seq[xsbti.Problem] = Incomplete.allExceptions(incomplete :: Nil).toSeq flatMap {
+            case cf: xsbti.CompileFailed => cf.problems
+            case _ => Seq.empty
+          }
+
+          val javacProblems: Seq[xsbti.Problem] = {
             Incomplete.linearize(incomplete).filter(i => i.node.isDefined && i.node.get.isInstanceOf[ScopedKey[_]]).flatMap { i =>
               val JavacError = """\[error\]\s*(.*[.]java):(\d+):\s*(.*)""".r
               val JavacErrorInfo = """\[error\]\s*([a-z ]+):(.*)""".r
@@ -188,9 +205,10 @@ trait PlayReloader {
               }
 
             }
-          }).map(remapProblemForGeneratedSources)
-        }
+          }
 
+          (exceptionProblems ++ javacProblems).map(remapProblemForGeneratedSources)
+        }
 
         def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] = {
           val topType = className.split('$').head
@@ -211,34 +229,6 @@ trait PlayReloader {
               Array[java.lang.Object](file, l)
           }.orNull
         }
-
-        def remapProblemForGeneratedSources(problem: xsbti.Problem) = {
-          val mappedPosition = playPositionMapper(problem.position)
-          mappedPosition.map { pos =>
-            new xsbti.Problem {
-              def message = problem.message
-              def category = ""
-              def position = pos
-              def severity = problem.severity
-            }
-          } getOrElse problem
-        }
-
-        private def allProblems(inc: Incomplete): Seq[xsbti.Problem] = {
-          allProblems(inc :: Nil)
-        }
-
-        private def allProblems(incs: Seq[Incomplete]): Seq[xsbti.Problem] = {
-          problems(Incomplete.allExceptions(incs).toSeq)
-        }
-
-        private def problems(es: Seq[Throwable]): Seq[xsbti.Problem] = {
-          es flatMap {
-            case cf: xsbti.CompileFailed => cf.problems
-            case _ => Nil
-          }
-        }
-
 
         def close() = {
           currentAnalysis = None
