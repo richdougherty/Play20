@@ -167,7 +167,7 @@ trait PlaySettings {
 
     // playCommonClassloader <<= playCommonClassloaderTask,
 
-    playDependencyClassLoader := createURLClassLoader,
+    // playDependencyClassLoader := createURLClassLoader,
 
     // playReloaderClassLoader := createDelegatedResourcesClassLoader,
 

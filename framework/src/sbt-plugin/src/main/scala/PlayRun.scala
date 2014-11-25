@@ -69,11 +69,7 @@ trait PlayRun extends PlayInternalKeys {
     else (javaProperties, maybePort.map(parsePort).orElse(Some(defaultHttpPort)), maybeHttpsPort)
   }
 
-  val createURLClassLoader: ClassLoaderCreator = (name, urls, parent) => new URLClassLoader(urls, parent) {
-    override def toString = name + "{" + getURLs.map(_.toString).mkString(", ") + "}"
-  }
-
-  val playDefaultRunTask = playRunTask(playRunHooks, playDependencyClasspath, playDependencyClassLoader,
+  val playDefaultRunTask = playRunTask(playRunHooks, playDependencyClasspath,
     playReloaderClasspath, playAssetsClassLoader)
 
   /**
@@ -85,7 +81,7 @@ trait PlayRun extends PlayInternalKeys {
    * release.
    */
   def playRunTask(runHooks: TaskKey[Seq[play.PlayRunHook]],
-    dependencyClasspath: TaskKey[Classpath], dependencyClassLoader: TaskKey[ClassLoaderCreator],
+    dependencyClasspath: TaskKey[Classpath],
     reloaderClasspath: TaskKey[Classpath],
     assetsClassLoader: TaskKey[ClassLoader => ClassLoader]): Def.Initialize[InputTask[Unit]] = Def.inputTask {
 
@@ -99,7 +95,6 @@ trait PlayRun extends PlayInternalKeys {
       runHooks.value,
       (javaOptions in Runtime).value,
       dependencyClasspath.value,
-      dependencyClassLoader.value,
       reloaderClasspath,
       assetsClassLoader.value,
       playCommonClasspath.value,
@@ -207,7 +202,7 @@ trait PlayRun extends PlayInternalKeys {
    * @return A closeable that can be closed to stop the server
    */
   private def startDevMode(state: State, runHooks: Seq[play.PlayRunHook], javaOptions: Seq[String],
-    dependencyClasspath: Classpath, dependencyClassLoader: ClassLoaderCreator,
+    dependencyClasspath: Classpath,
     reloaderClasspathTask: TaskKey[Classpath],
     assetsClassLoader: ClassLoader => ClassLoader, commonClasspath: Classpath,
     monitoredFiles: Seq[String], playWatchService: PlayWatchService,
@@ -286,7 +281,9 @@ trait PlayRun extends PlayInternalKeys {
       }
     )
 
-    lazy val applicationLoader = dependencyClassLoader("PlayDependencyClassLoader", urls(dependencyClasspath), delegatingLoader)
+    lazy val applicationLoader = new URLClassLoader(urls(dependencyClasspath), delegatingLoader) {
+      override def toString = "PlayDependencyClassLoader{" + getURLs.map(_.toString).mkString(", ") + "}"
+    }
     lazy val assetsLoader = assetsClassLoader(applicationLoader)
 
     lazy val reloader: PlayBuildLink = newReloader(state, playReload, reloaderClasspathTask, assetsLoader,

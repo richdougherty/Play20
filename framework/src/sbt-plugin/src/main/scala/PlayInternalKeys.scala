@@ -13,7 +13,7 @@ trait PlayInternalKeys {
   val playReloaderClasspath = TaskKey[Classpath]("play-reloader-classpath")
   val playCommonClasspath = TaskKey[Classpath]("play-common-classpath")
   // val playCommonClassloader = TaskKey[ClassLoader]("play-common-classloader")
-  val playDependencyClassLoader = TaskKey[ClassLoaderCreator]("play-dependency-classloader")
+  // val playDependencyClassLoader = TaskKey[ClassLoaderCreator]("play-dependency-classloader")
   // val playReloaderClassLoader = TaskKey[ClassLoaderCreator]("play-reloader-classloader")
   val playReload = TaskKey[sbt.inc.Analysis]("play-reload")
   val buildRequire = TaskKey[Seq[(File, File)]]("play-build-require-assets")
