@@ -87,6 +87,20 @@ trait PlayReloader {
        */
       def reload: AnyRef = {
         play.Play.synchronized {
+
+          def runPlayReloadTask(): Either[Throwable, Unit] = {
+            Project.runTask(playReload, state).map(_._2).get.toEither
+              .right.map { compilationResult =>
+                currentAnalysis = Some(compilationResult)
+                ()
+              }
+          }
+
+          def runPlayClasspathTask(): Either[Throwable, Classpath] = {
+              Project.runTask(classpathTask, state).map(_._2).get.toEither
+                .left.map(taskFailureHandler)
+          }
+
           if (changed || forceReloadNextTime || currentAnalysis.isEmpty
             || currentApplicationClassLoader.isEmpty) {
 
@@ -96,39 +110,32 @@ trait PlayReloader {
             forceReloadNextTime = false
 
             // Run the reload task, which will trigger everything to compile
-            Project.runTask(playReload, state).map(_._2).get.toEither
-              .left.map(taskFailureHandler)
-              .right.map { compilationResult =>
+            runPlayReloadTask().right.flatMap { _ =>
+              // Calculate the classpath
+              runPlayClasspathTask().right.map { classpath =>
 
-                currentAnalysis = Some(compilationResult)
+                // We only want to reload if the classpath has changed.  Assets don't live on the classpath, so
+                // they won't trigger a reload.
+                // Use the SBT watch service, passing true as the termination to force it to break after one check
+                val (_, newState) = SourceModificationWatch.watch(classpath.files.***, 0, watchState)(true)
+                // SBT has a quiet wait period, if that's set to true, sources were modified
+                val triggered = newState.awaitingQuietPeriod
+                watchState = newState
 
-                // Calculate the classpath
-                Project.runTask(classpathTask, state).map(_._2).get.toEither
-                  .left.map(taskFailureHandler)
-                  .right.map { classpath =>
+                if (triggered || shouldReload || currentApplicationClassLoader.isEmpty) {
 
-                    // We only want to reload if the classpath has changed.  Assets don't live on the classpath, so
-                    // they won't trigger a reload.
-                    // Use the SBT watch service, passing true as the termination to force it to break after one check
-                    val (_, newState) = SourceModificationWatch.watch(classpath.files.***, 0, watchState)(true)
-                    // SBT has a quiet wait period, if that's set to true, sources were modified
-                    val triggered = newState.awaitingQuietPeriod
-                    watchState = newState
-
-                    if (triggered || shouldReload || currentApplicationClassLoader.isEmpty) {
-
-                      // Create a new classloader
-                      val version = classLoaderVersion.incrementAndGet
-                      val name = "ReloadableClassLoader(v" + version + ")"
-                      val urls = Path.toURLs(classpath.files)
-                      val loader = createClassLoader(name, urls, baseLoader)
-                      currentApplicationClassLoader = Some(loader)
-                      loader
-                    } else {
-                      null // null means nothing changed
-                    }
-                  }.fold(identity, identity)
-              }.fold(identity, identity)
+                  // Create a new classloader
+                  val version = classLoaderVersion.incrementAndGet
+                  val name = "ReloadableClassLoader(v" + version + ")"
+                  val urls = Path.toURLs(classpath.files)
+                  val loader = createClassLoader(name, urls, baseLoader)
+                  currentApplicationClassLoader = Some(loader)
+                  loader
+                } else {
+                  null // null means nothing changed
+                }
+              }
+            }.fold(identity[Throwable], identity[ClassLoader])
           } else {
             null // null means nothing changed
           }
