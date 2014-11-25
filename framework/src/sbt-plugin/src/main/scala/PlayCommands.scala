@@ -257,20 +257,10 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
     inAllDeps(base, deps, key, structure.data)
   }
 
-  private[this] var commonClassLoader: ClassLoader = _
-
-  val playCommonClassloaderTask = (dependencyClasspath in Compile) map { classpath =>
-    lazy val commonJars: PartialFunction[java.io.File, java.net.URL] = {
-      case jar if jar.getName.startsWith("h2-") || jar.getName == "h2.jar" => jar.toURI.toURL
+  val playCommonClasspathTask = (dependencyClasspath in Compile) map { classpath =>
+    classpath.collect {
+      case jar if jar.data.getName.startsWith("h2-") || jar.data.getName == "h2.jar" => jar
     }
-
-    if (commonClassLoader == null) {
-      commonClassLoader = new java.net.URLClassLoader(classpath.map(_.data).collect(commonJars).toArray, null /* important here, don't depend of the sbt classLoader! */ ) {
-        override def toString = "Common ClassLoader: " + getURLs.map(_.toString).mkString(",")
-      }
-    }
-
-    commonClassLoader
   }
 
   val playCompileEverythingTask = (state, thisProjectRef) flatMap { (s, r) =>
@@ -319,7 +309,8 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
 
   val h2Command = Command.command("h2-browser") { state: State =>
     try {
-      val commonLoader = Project.runTask(playCommonClassloader, state).get._2.toEither.right.get
+      val commonClasspath = Project.runTask(playCommonClasspath, state).get._2.toEither.right.get
+      val commonLoader = cachedCommonClassLoader(commonClasspath)
       val h2ServerClass = commonLoader.loadClass(classOf[org.h2.tools.Server].getName)
       h2ServerClass.getMethod("main", classOf[Array[String]]).invoke(null, Array.empty[String])
     } catch {

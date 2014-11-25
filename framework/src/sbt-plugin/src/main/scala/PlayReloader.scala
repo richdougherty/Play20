@@ -3,9 +3,9 @@
  */
 package play
 
+import java.net.URLClassLoader
 import play.runsupport.PlayWatchService
 import play.sbtplugin.run._
-
 import play.api._
 import play.core._
 // import play.core.buildlink._
@@ -20,6 +20,21 @@ import PlayExceptions._
 
 trait PlayReloader {
   this: PlayCommands with PlayPositionMapper =>
+
+  private var commonClassLoaderCache: ClassLoader = null
+
+  protected def cachedCommonClassLoader(commonClasspath: Classpath): ClassLoader = {
+    if (commonClassLoaderCache == null) {
+      commonClassLoaderCache = createCommonClassLoaderFromClasspath(commonClasspath)
+    }
+    commonClassLoaderCache
+  }
+
+  private def createCommonClassLoaderFromClasspath(commonClasspath: Classpath): ClassLoader = {
+    new URLClassLoader(commonClasspath.map(_.data.toURI.toURL).to[Array], null /* important here, don't depend of the sbt classLoader! */ ) {
+      override def toString = "Common ClassLoader: " + getURLs.map(_.toString).mkString(",")
+    }
+  }
 
   sealed trait BuildResult
   case object SameBuild extends BuildResult

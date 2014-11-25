@@ -69,7 +69,7 @@ trait PlayRun extends PlayInternalKeys {
     else (javaProperties, maybePort.map(parsePort).orElse(Some(defaultHttpPort)), maybeHttpsPort)
   }
 
-  val createURLClassLoader: ClassLoaderCreator = (name, urls, parent) => new java.net.URLClassLoader(urls, parent) {
+  val createURLClassLoader: ClassLoaderCreator = (name, urls, parent) => new URLClassLoader(urls, parent) {
     override def toString = name + "{" + getURLs.map(_.toString).mkString(", ") + "}"
   }
 
@@ -102,7 +102,7 @@ trait PlayRun extends PlayInternalKeys {
       dependencyClassLoader.value,
       reloaderClasspath,
       assetsClassLoader.value,
-      playCommonClassloader.value,
+      playCommonClasspath.value,
       playMonitoredFiles.value,
       playWatchService.value,
       (managedClasspath in DocsApplication).value,
@@ -209,7 +209,7 @@ trait PlayRun extends PlayInternalKeys {
   private def startDevMode(state: State, runHooks: Seq[play.PlayRunHook], javaOptions: Seq[String],
     dependencyClasspath: Classpath, dependencyClassLoader: ClassLoaderCreator,
     reloaderClasspathTask: TaskKey[Classpath],
-    assetsClassLoader: ClassLoader => ClassLoader, commonClassLoader: ClassLoader,
+    assetsClassLoader: ClassLoader => ClassLoader, commonClasspath: Classpath,
     monitoredFiles: Seq[String], playWatchService: PlayWatchService,
     docsClasspath: Classpath, interaction: PlayInteractionMode, defaultHttpPort: Int,
     args: Seq[String]): PlayDevServer = {
@@ -278,9 +278,13 @@ trait PlayRun extends PlayInternalKeys {
      * buildLoader. Also accesses the reloader resources to make these available
      * to the applicationLoader, creating a full circle for resource loading.
      */
-    lazy val delegatingLoader: ClassLoader = new DelegatingClassLoader(commonClassLoader, buildLoader, new ApplicationClassLoaderProvider {
-      def get: ClassLoader = { reloader.applicationLink.getClassLoader.orNull }
-    })
+    lazy val delegatingLoader: ClassLoader = new DelegatingClassLoader(
+      cachedCommonClassLoader(commonClasspath),
+      buildLoader,
+      new ApplicationClassLoaderProvider {
+        def get: ClassLoader = { reloader.applicationLink.getClassLoader.orNull }
+      }
+    )
 
     lazy val applicationLoader = dependencyClassLoader("PlayDependencyClassLoader", urls(dependencyClasspath), delegatingLoader)
     lazy val assetsLoader = assetsClassLoader(applicationLoader)

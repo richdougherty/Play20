@@ -11,7 +11,8 @@ trait PlayInternalKeys {
 
   val playDependencyClasspath = TaskKey[Classpath]("play-dependency-classpath")
   val playReloaderClasspath = TaskKey[Classpath]("play-reloader-classpath")
-  val playCommonClassloader = TaskKey[ClassLoader]("play-common-classloader")
+  val playCommonClasspath = TaskKey[Classpath]("play-common-classpath")
+  // val playCommonClassloader = TaskKey[ClassLoader]("play-common-classloader")
   val playDependencyClassLoader = TaskKey[ClassLoaderCreator]("play-dependency-classloader")
   // val playReloaderClassLoader = TaskKey[ClassLoaderCreator]("play-reloader-classloader")
   val playReload = TaskKey[sbt.inc.Analysis]("play-reload")

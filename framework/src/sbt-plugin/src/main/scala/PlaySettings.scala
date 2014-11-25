@@ -163,7 +163,9 @@ trait PlaySettings {
     // filter out asset directories from the classpath (supports sbt-web 1.0 and 1.1)
     playReloaderClasspath ~= { _.filter(_.get(WebKeys.webModulesLib.key).isEmpty) },
 
-    playCommonClassloader <<= playCommonClassloaderTask,
+    playCommonClasspath <<= playCommonClasspathTask,
+
+    // playCommonClassloader <<= playCommonClassloaderTask,
 
     playDependencyClassLoader := createURLClassLoader,
 
