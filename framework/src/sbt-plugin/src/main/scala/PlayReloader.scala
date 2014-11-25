@@ -52,6 +52,9 @@ trait PlayReloader {
 
       lazy val projectPath = extracted.currentProject.base
 
+      // The current classpath for the application. This value starts out empty
+      // but changes on each successful new compilation.
+      @volatile private var currentApplicationClasspath: Option[Classpath] = None
       // The current classloader for the application. This value starts out empty
       // but changes on each successful new compilation.
       @volatile private var currentApplicationClassLoader: Option[ClassLoader] = None
@@ -97,48 +100,92 @@ trait PlayReloader {
           }
 
           def runPlayClasspathTask(): Either[Throwable, Classpath] = {
-              Project.runTask(classpathTask, state).map(_._2).get.toEither
-                .left.map(taskFailureHandler)
+            Project.runTask(classpathTask, state).map(_._2).get.toEither
+              .left.map(taskFailureHandler)
           }
 
-          if (changed || forceReloadNextTime || currentAnalysis.isEmpty
-            || currentApplicationClassLoader.isEmpty) {
+          def classpathChanged(classpath: Classpath): Boolean = {
+              // We only want to reload if the classpath has changed.  Assets don't live on the classpath, so
+              // they won't trigger a reload.
+              // Use the SBT watch service, passing true as the termination to force it to break after one check
+              val (_, newState) = SourceModificationWatch.watch(classpath.files.***, 0, watchState)(true)
+              watchState = newState
+              // SBT has a quiet wait period, if that's set to true, sources were modified
+              newState.awaitingQuietPeriod
+          }
 
-            val shouldReload = forceReloadNextTime
+          def classLoaderFromClasspath(classpath: Classpath): ClassLoader = {
+            // Create a new classloader
+            val version = classLoaderVersion.incrementAndGet
+            val name = "ReloadableClassLoader(v" + version + ")"
+            val urls = Path.toURLs(classpath.files)
+            val loader = createClassLoader(name, urls, baseLoader)
+            currentApplicationClassLoader = Some(loader)
+            loader
+          }
 
-            changed = false
-            forceReloadNextTime = false
+          sealed trait BuildResult
+          case object SameBuild extends BuildResult
+          case class NewBuild(classpath: Classpath) extends BuildResult
+          case class FailedBuild(t: Throwable) extends BuildResult
 
+          def cacheBuildResultClasspath(buildResult: BuildResult): Unit = {
+            // cache classpath in case we need to force a reload
+            buildResult match {
+              case _: FailedBuild =>
+                currentApplicationClasspath = None
+              case NewBuild(classpath) =>
+                currentApplicationClasspath = Some(classpath)
+              case _ =>
+            }
+          }
+
+          def reloadWithBuildResult(buildResult: BuildResult): AnyRef = {
+            if (forceReloadNextTime) {
+              forceReloadNextTime = false // DATA RACE
+              buildResult match {
+                case FailedBuild(t) =>
+                  t
+                case _ =>
+                  assert(currentApplicationClasspath.isDefined, "If not FailedBuild, then at least one build must have succeeded.")
+                  classLoaderFromClasspath(currentApplicationClasspath.get)
+              }
+            } else {
+              buildResult match {
+                case FailedBuild(t) =>
+                  t
+                case NewBuild(classpath) =>
+                  classLoaderFromClasspath(classpath)
+                case SameBuild =>
+                  null
+              }
+            }
+          }
+
+          def build(): BuildResult = if (changed || currentAnalysis.isEmpty || currentApplicationClassLoader.isEmpty) {
+            changed = false // DATA RACE
             // Run the reload task, which will trigger everything to compile
             runPlayReloadTask().right.flatMap { _ =>
               // Calculate the classpath
               runPlayClasspathTask().right.map { classpath =>
-
-                // We only want to reload if the classpath has changed.  Assets don't live on the classpath, so
-                // they won't trigger a reload.
-                // Use the SBT watch service, passing true as the termination to force it to break after one check
-                val (_, newState) = SourceModificationWatch.watch(classpath.files.***, 0, watchState)(true)
-                // SBT has a quiet wait period, if that's set to true, sources were modified
-                val triggered = newState.awaitingQuietPeriod
-                watchState = newState
-
-                if (triggered || shouldReload || currentApplicationClassLoader.isEmpty) {
-
-                  // Create a new classloader
-                  val version = classLoaderVersion.incrementAndGet
-                  val name = "ReloadableClassLoader(v" + version + ")"
-                  val urls = Path.toURLs(classpath.files)
-                  val loader = createClassLoader(name, urls, baseLoader)
-                  currentApplicationClassLoader = Some(loader)
-                  loader
+                val triggered = classpathChanged(classpath)
+                if (triggered || currentApplicationClassLoader.isEmpty) {
+                  NewBuild(classpath)
                 } else {
-                  null // null means nothing changed
+                  SameBuild
                 }
               }
-            }.fold(identity[Throwable], identity[ClassLoader])
+            }.fold(
+              t => FailedBuild(t),
+              identity[BuildResult]
+            )
           } else {
-            null // null means nothing changed
+            SameBuild
           }
+
+          val buildResult: BuildResult = build()
+          cacheBuildResultClasspath(buildResult)
+          reloadWithBuildResult(buildResult)
         }
       }
 
