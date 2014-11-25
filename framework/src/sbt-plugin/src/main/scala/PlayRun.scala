@@ -73,14 +73,8 @@ trait PlayRun extends PlayInternalKeys {
     override def toString = name + "{" + getURLs.map(_.toString).mkString(", ") + "}"
   }
 
-  val createDelegatedResourcesClassLoader: ClassLoaderCreator = (name, urls, parent) => new java.net.URLClassLoader(urls, parent) {
-    require(parent ne null)
-    override def getResources(name: String): java.util.Enumeration[java.net.URL] = getParent.getResources(name)
-    override def toString = name + "{" + getURLs.map(_.toString).mkString(", ") + "}"
-  }
-
   val playDefaultRunTask = playRunTask(playRunHooks, playDependencyClasspath, playDependencyClassLoader,
-    playReloaderClasspath, playReloaderClassLoader, playAssetsClassLoader)
+    playReloaderClasspath, playAssetsClassLoader)
 
   /**
    * This method is public API, used by sbt-echo, which is used by Activator:
@@ -92,7 +86,7 @@ trait PlayRun extends PlayInternalKeys {
    */
   def playRunTask(runHooks: TaskKey[Seq[play.PlayRunHook]],
     dependencyClasspath: TaskKey[Classpath], dependencyClassLoader: TaskKey[ClassLoaderCreator],
-    reloaderClasspath: TaskKey[Classpath], reloaderClassLoader: TaskKey[ClassLoaderCreator],
+    reloaderClasspath: TaskKey[Classpath],
     assetsClassLoader: TaskKey[ClassLoader => ClassLoader]): Def.Initialize[InputTask[Unit]] = Def.inputTask {
 
     val args = Def.spaceDelimited().parsed
@@ -107,7 +101,6 @@ trait PlayRun extends PlayInternalKeys {
       dependencyClasspath.value,
       dependencyClassLoader.value,
       reloaderClasspath,
-      reloaderClassLoader.value,
       assetsClassLoader.value,
       playCommonClassloader.value,
       playMonitoredFiles.value,
@@ -215,7 +208,7 @@ trait PlayRun extends PlayInternalKeys {
    */
   private def startDevMode(state: State, runHooks: Seq[play.PlayRunHook], javaOptions: Seq[String],
     dependencyClasspath: Classpath, dependencyClassLoader: ClassLoaderCreator,
-    reloaderClasspathTask: TaskKey[Classpath], reloaderClassLoader: ClassLoaderCreator,
+    reloaderClasspathTask: TaskKey[Classpath],
     assetsClassLoader: ClassLoader => ClassLoader, commonClassLoader: ClassLoader,
     monitoredFiles: Seq[String], playWatchService: PlayWatchService,
     docsClasspath: Classpath, interaction: PlayInteractionMode, defaultHttpPort: Int,
@@ -292,7 +285,7 @@ trait PlayRun extends PlayInternalKeys {
     lazy val applicationLoader = dependencyClassLoader("PlayDependencyClassLoader", urls(dependencyClasspath), delegatingLoader)
     lazy val assetsLoader = assetsClassLoader(applicationLoader)
 
-    lazy val reloader: PlayBuildLink = newReloader(state, playReload, reloaderClassLoader, reloaderClasspathTask, assetsLoader,
+    lazy val reloader: PlayBuildLink = newReloader(state, playReload, reloaderClasspathTask, assetsLoader,
       monitoredFiles, playWatchService)
 
     try {

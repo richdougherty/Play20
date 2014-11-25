@@ -167,7 +167,7 @@ trait PlaySettings {
 
     playDependencyClassLoader := createURLClassLoader,
 
-    playReloaderClassLoader := createDelegatedResourcesClassLoader,
+    // playReloaderClassLoader := createDelegatedResourcesClassLoader,
 
     playCompileEverything <<= playCompileEverythingTask,
 

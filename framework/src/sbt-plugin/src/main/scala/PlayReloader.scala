@@ -32,12 +32,90 @@ trait PlayReloader {
     def close(): Unit
   }
 
-  trait PlayApplicationLink {
-    def reload(): java.lang.Object
-    def forceReload(): Unit
-    def getClassLoader: Option[ClassLoader]
-    def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object]
-    def close(): Unit
+  class DelegatedResourcesClassLoader(name: String, urls: Array[URL], parent: ClassLoader) extends java.net.URLClassLoader(urls, parent) {
+    require(parent ne null)
+    override def getResources(name: String): java.util.Enumeration[java.net.URL] = getParent.getResources(name)
+    override def toString = name + "{" + getURLs.map(_.toString).mkString(", ") + "}"
+  }
+
+  class PlayApplicationLink(sbtLink: PlaySbtLink, baseLoader: ClassLoader) {
+    // Flag to force a reload on the next request.
+    // This is set if a compile error occurs, and also by the forceReload method on BuildLink, which is called for
+    // example when evolutions have been applied.
+    @volatile private var forceReloadNextTime = false
+    // The current classpath for the application. This value starts out empty
+    // but changes on each successful new compilation.
+    @volatile private var currentApplicationClasspath: Option[Classpath] = None
+    // The current classloader for the application. This value starts out empty
+    // but changes on each successful new compilation.
+    @volatile private var currentApplicationClassLoader: Option[ClassLoader] = None
+
+    private val classLoaderVersion = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    def reload(): AnyRef = {
+      play.Play.synchronized {
+
+        def classLoaderFromClasspath(classpath: Classpath): ClassLoader = {
+          // Create a new classloader
+          val version = classLoaderVersion.incrementAndGet
+          val name = "ReloadableClassLoader(v" + version + ")"
+          val urls = Path.toURLs(classpath.files)
+          val loader = new DelegatedResourcesClassLoader(name, urls, baseLoader)
+          currentApplicationClassLoader = Some(loader)
+          loader
+        }
+
+        def cacheBuildResultClasspath(buildResult: BuildResult): Unit = {
+          // cache classpath in case we need to force a reload
+          buildResult match {
+            case _: FailedBuild =>
+              currentApplicationClasspath = None
+            case NewBuild(classpath) =>
+              currentApplicationClasspath = Some(classpath)
+            case _ =>
+          }
+        }
+
+        def reloadWithBuildResult(buildResult: BuildResult): AnyRef = {
+          if (forceReloadNextTime) {
+            forceReloadNextTime = false // DATA RACE
+            buildResult match {
+              case FailedBuild(t) =>
+                t
+              case _ =>
+                assert(currentApplicationClasspath.isDefined, "If not FailedBuild, then at least one build must have succeeded.")
+                classLoaderFromClasspath(currentApplicationClasspath.get)
+            }
+          } else {
+            buildResult match {
+              case FailedBuild(t) =>
+                t
+              case NewBuild(classpath) =>
+                classLoaderFromClasspath(classpath)
+              case SameBuild =>
+                null
+            }
+          }
+        }
+
+
+        val buildResult: BuildResult = sbtLink.build()
+        cacheBuildResultClasspath(buildResult)
+        reloadWithBuildResult(buildResult)
+      }
+    }
+    def forceReload() {
+      forceReloadNextTime = true
+    }
+    def getClassLoader = currentApplicationClassLoader
+
+    def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] = {
+      sbtLink.findSource(className, line)
+    }
+
+    def close() = {
+      currentApplicationClassLoader = None
+    }
   }
 
   /**
@@ -57,7 +135,6 @@ trait PlayReloader {
    */
   def newReloader(state: State,
     playReload: TaskKey[sbt.inc.Analysis],
-    createClassLoader: ClassLoaderCreator,
     classpathTask: TaskKey[Classpath],
     baseLoader: ClassLoader,
     monitoredFiles: Seq[String],
@@ -236,86 +313,7 @@ trait PlayReloader {
         }
       }
 
-      val applicationLink = new PlayApplicationLink {
-        // Flag to force a reload on the next request.
-        // This is set if a compile error occurs, and also by the forceReload method on BuildLink, which is called for
-        // example when evolutions have been applied.
-        @volatile private var forceReloadNextTime = false
-        // The current classpath for the application. This value starts out empty
-        // but changes on each successful new compilation.
-        @volatile private var currentApplicationClasspath: Option[Classpath] = None
-        // The current classloader for the application. This value starts out empty
-        // but changes on each successful new compilation.
-        @volatile private var currentApplicationClassLoader: Option[ClassLoader] = None
-
-        private val classLoaderVersion = new java.util.concurrent.atomic.AtomicInteger(0)
-
-        def reload: AnyRef = {
-          play.Play.synchronized {
-
-            def classLoaderFromClasspath(classpath: Classpath): ClassLoader = {
-              // Create a new classloader
-              val version = classLoaderVersion.incrementAndGet
-              val name = "ReloadableClassLoader(v" + version + ")"
-              val urls = Path.toURLs(classpath.files)
-              val loader = createClassLoader(name, urls, baseLoader)
-              currentApplicationClassLoader = Some(loader)
-              loader
-            }
-
-            def cacheBuildResultClasspath(buildResult: BuildResult): Unit = {
-              // cache classpath in case we need to force a reload
-              buildResult match {
-                case _: FailedBuild =>
-                  currentApplicationClasspath = None
-                case NewBuild(classpath) =>
-                  currentApplicationClasspath = Some(classpath)
-                case _ =>
-              }
-            }
-
-            def reloadWithBuildResult(buildResult: BuildResult): AnyRef = {
-              if (forceReloadNextTime) {
-                forceReloadNextTime = false // DATA RACE
-                buildResult match {
-                  case FailedBuild(t) =>
-                    t
-                  case _ =>
-                    assert(currentApplicationClasspath.isDefined, "If not FailedBuild, then at least one build must have succeeded.")
-                    classLoaderFromClasspath(currentApplicationClasspath.get)
-                }
-              } else {
-                buildResult match {
-                  case FailedBuild(t) =>
-                    t
-                  case NewBuild(classpath) =>
-                    classLoaderFromClasspath(classpath)
-                  case SameBuild =>
-                    null
-                }
-              }
-            }
-
-
-            val buildResult: BuildResult = sbtLink.build()
-            cacheBuildResultClasspath(buildResult)
-            reloadWithBuildResult(buildResult)
-          }
-        }
-        def forceReload() {
-          forceReloadNextTime = true
-        }
-        def getClassLoader = currentApplicationClassLoader
-
-        def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] = {
-          sbtLink.findSource(className, line)
-        }
-
-        def close() = {
-          currentApplicationClassLoader = None
-        }
-      }
-
+      val applicationLink = new PlayApplicationLink(sbtLink, baseLoader)
 
       lazy val settings = {
         import scala.collection.JavaConverters._
