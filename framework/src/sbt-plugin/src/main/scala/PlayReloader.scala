@@ -21,18 +21,28 @@ import PlayExceptions._
 trait PlayReloader {
   this: PlayCommands with PlayPositionMapper =>
 
+  sealed trait BuildResult
+  case object SameBuild extends BuildResult
+  case class NewBuild(classpath: Classpath) extends BuildResult
+  case class FailedBuild(t: Throwable) extends BuildResult
+
+  trait PlayApplicationLink {
+    def reload(): java.lang.Object
+    def forceReload(): Unit
+    def getClassLoader: Option[ClassLoader]
+    def close(): Unit
+  }
+
   /**
    * An extension of BuildLink to provide internal methods to PlayRun, such as the ability to get the classloader,
    * and the ability to close it (stop watching files).
    */
   trait PlayBuildLink {
-    def reload(): java.lang.Object
+    def applicationLink: PlayApplicationLink
     def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object]
     def projectPath(): File
-    def forceReload(): Unit
     def settings(): java.util.Map[String, String]
     def close(): Unit
-    def getClassLoader: Option[ClassLoader]
   }
 
   /**
@@ -52,20 +62,11 @@ trait PlayReloader {
 
       lazy val projectPath = extracted.currentProject.base
 
-      // The current classpath for the application. This value starts out empty
-      // but changes on each successful new compilation.
-      @volatile private var currentApplicationClasspath: Option[Classpath] = None
-      // The current classloader for the application. This value starts out empty
-      // but changes on each successful new compilation.
-      @volatile private var currentApplicationClassLoader: Option[ClassLoader] = None
-      // Flag to force a reload on the next request.
-      // This is set if a compile error occurs, and also by the forceReload method on BuildLink, which is called for
-      // example when evolutions have been applied.
-      @volatile private var forceReloadNextTime = false
       // Whether any source files have changed since the last request.
       @volatile private var changed = false
       // The last successful compile results. Used for rendering nice errors.
       @volatile private var currentAnalysis = Option.empty[sbt.inc.Analysis]
+      @volatile private var isBuilt = false
       // A watch state for the classpath. Used to determine whether anything on the classpath has changed as a result
       // of compilation, and therefore a new classloader is needed and the app needs to be reloaded.
       @volatile private var watchState: WatchState = WatchState.empty
@@ -74,128 +75,150 @@ trait PlayReloader {
       private val watcher = playWatchService.watch(monitoredFiles.map(new File(_)), () => {
         changed = true
       })
-      private val classLoaderVersion = new java.util.concurrent.atomic.AtomicInteger(0)
 
-      /**
-       * Contrary to its name, this doesn't necessarily reload the app.  It is invoked on every request, and will only
-       * trigger a reload of the app if something has changed.
-       *
-       * Since this communicates across classloaders, it must return only simple objects.
-       *
-       *
-       * @return Either
-       * - Throwable - If something went wrong (eg, a compile error).
-       * - ClassLoader - If the classloader has changed, and the application should be reloaded.
-       * - null - If nothing changed.
-       */
-      def reload: AnyRef = {
-        play.Play.synchronized {
+      def build(): BuildResult = if (changed || currentAnalysis.isEmpty || !isBuilt) {
+        changed = false // DATA RACE
 
-          def runPlayReloadTask(): Either[Throwable, Unit] = {
-            Project.runTask(playReload, state).map(_._2).get.toEither
-              .right.map { compilationResult =>
-                currentAnalysis = Some(compilationResult)
-                ()
-              }
-          }
-
-          def runPlayClasspathTask(): Either[Throwable, Classpath] = {
-            Project.runTask(classpathTask, state).map(_._2).get.toEither
-              .left.map(taskFailureHandler)
-          }
-
-          def classpathChanged(classpath: Classpath): Boolean = {
-              // We only want to reload if the classpath has changed.  Assets don't live on the classpath, so
-              // they won't trigger a reload.
-              // Use the SBT watch service, passing true as the termination to force it to break after one check
-              val (_, newState) = SourceModificationWatch.watch(classpath.files.***, 0, watchState)(true)
-              watchState = newState
-              // SBT has a quiet wait period, if that's set to true, sources were modified
-              newState.awaitingQuietPeriod
-          }
-
-          def classLoaderFromClasspath(classpath: Classpath): ClassLoader = {
-            // Create a new classloader
-            val version = classLoaderVersion.incrementAndGet
-            val name = "ReloadableClassLoader(v" + version + ")"
-            val urls = Path.toURLs(classpath.files)
-            val loader = createClassLoader(name, urls, baseLoader)
-            currentApplicationClassLoader = Some(loader)
-            loader
-          }
-
-          sealed trait BuildResult
-          case object SameBuild extends BuildResult
-          case class NewBuild(classpath: Classpath) extends BuildResult
-          case class FailedBuild(t: Throwable) extends BuildResult
-
-          def cacheBuildResultClasspath(buildResult: BuildResult): Unit = {
-            // cache classpath in case we need to force a reload
-            buildResult match {
-              case _: FailedBuild =>
-                currentApplicationClasspath = None
-              case NewBuild(classpath) =>
-                currentApplicationClasspath = Some(classpath)
-              case _ =>
+        def runTask[T](taskKey: Def.ScopedKey[Task[T]]): Either[FailedBuild, T] = {
+          val result: Result[T] = Project.runTask(taskKey, state).get._2
+          result.toEither.left.map { incomplete: Incomplete =>
+            // We force reload next time because compilation failed this time
+            isBuilt = false
+            val t: Throwable = Incomplete.allExceptions(incomplete).headOption.map {
+              case e: PlayException => e
+              case e: xsbti.CompileFailed =>
+                getProblems(incomplete)
+                  .find(_.severity == xsbti.Severity.Error)
+                  .map(CompilationException)
+                  .getOrElse(UnexpectedException(Some("The compilation failed without reporting any problem!"), Some(e)))
+              case e: Exception => UnexpectedException(unexpected = Some(e))
+            }.getOrElse {
+              UnexpectedException(Some("The compilation task failed without any exception!"))
             }
+            FailedBuild(t)
           }
+        }
 
-          def reloadWithBuildResult(buildResult: BuildResult): AnyRef = {
-            if (forceReloadNextTime) {
-              forceReloadNextTime = false // DATA RACE
-              buildResult match {
-                case FailedBuild(t) =>
-                  t
-                case _ =>
-                  assert(currentApplicationClasspath.isDefined, "If not FailedBuild, then at least one build must have succeeded.")
-                  classLoaderFromClasspath(currentApplicationClasspath.get)
-              }
+        def runPlayReloadTask(): Either[FailedBuild, Unit] = {
+          runTask(playReload).right.map { compilationResult =>
+            currentAnalysis = Some(compilationResult)
+            ()
+          }
+        }
+
+        def runPlayClasspathTask(): Either[FailedBuild, Classpath] = {
+          runTask(classpathTask)
+        }
+
+        def classpathChanged(classpath: Classpath): Boolean = {
+            // We only want to reload if the classpath has changed.  Assets don't live on the classpath, so
+            // they won't trigger a reload.
+            // Use the SBT watch service, passing true as the termination to force it to break after one check
+            val (_, newState) = SourceModificationWatch.watch(classpath.files.***, 0, watchState)(true)
+            watchState = newState
+            // SBT has a quiet wait period, if that's set to true, sources were modified
+            newState.awaitingQuietPeriod
+        }
+
+        // Run the reload task, which will trigger everything to compile
+        runPlayReloadTask().right.flatMap { _ =>
+          // Calculate the classpath
+          runPlayClasspathTask().right.map { classpath =>
+            val triggered = classpathChanged(classpath)
+            if (triggered || !isBuilt) {
+              isBuilt = true
+              NewBuild(classpath)
             } else {
-              buildResult match {
-                case FailedBuild(t) =>
-                  t
-                case NewBuild(classpath) =>
-                  classLoaderFromClasspath(classpath)
-                case SameBuild =>
-                  null
-              }
+              SameBuild
             }
           }
+        }.fold(
+          identity[FailedBuild],
+          identity[BuildResult]
+        )
+      } else {
+        SameBuild
+      }
 
-          def build(): BuildResult = if (changed || currentAnalysis.isEmpty || currentApplicationClassLoader.isEmpty) {
-            changed = false // DATA RACE
-            // Run the reload task, which will trigger everything to compile
-            runPlayReloadTask().right.flatMap { _ =>
-              // Calculate the classpath
-              runPlayClasspathTask().right.map { classpath =>
-                val triggered = classpathChanged(classpath)
-                if (triggered || currentApplicationClassLoader.isEmpty) {
-                  NewBuild(classpath)
-                } else {
-                  SameBuild
+      val applicationLink = new PlayApplicationLink {
+        // Flag to force a reload on the next request.
+        // This is set if a compile error occurs, and also by the forceReload method on BuildLink, which is called for
+        // example when evolutions have been applied.
+        @volatile private var forceReloadNextTime = false
+        // The current classpath for the application. This value starts out empty
+        // but changes on each successful new compilation.
+        @volatile private var currentApplicationClasspath: Option[Classpath] = None
+        // The current classloader for the application. This value starts out empty
+        // but changes on each successful new compilation.
+        @volatile private var currentApplicationClassLoader: Option[ClassLoader] = None
+
+        private val classLoaderVersion = new java.util.concurrent.atomic.AtomicInteger(0)
+
+        def reload: AnyRef = {
+          play.Play.synchronized {
+
+            def classLoaderFromClasspath(classpath: Classpath): ClassLoader = {
+              // Create a new classloader
+              val version = classLoaderVersion.incrementAndGet
+              val name = "ReloadableClassLoader(v" + version + ")"
+              val urls = Path.toURLs(classpath.files)
+              val loader = createClassLoader(name, urls, baseLoader)
+              currentApplicationClassLoader = Some(loader)
+              loader
+            }
+
+            def cacheBuildResultClasspath(buildResult: BuildResult): Unit = {
+              // cache classpath in case we need to force a reload
+              buildResult match {
+                case _: FailedBuild =>
+                  currentApplicationClasspath = None
+                case NewBuild(classpath) =>
+                  currentApplicationClasspath = Some(classpath)
+                case _ =>
+              }
+            }
+
+            def reloadWithBuildResult(buildResult: BuildResult): AnyRef = {
+              if (forceReloadNextTime) {
+                forceReloadNextTime = false // DATA RACE
+                buildResult match {
+                  case FailedBuild(t) =>
+                    t
+                  case _ =>
+                    assert(currentApplicationClasspath.isDefined, "If not FailedBuild, then at least one build must have succeeded.")
+                    classLoaderFromClasspath(currentApplicationClasspath.get)
+                }
+              } else {
+                buildResult match {
+                  case FailedBuild(t) =>
+                    t
+                  case NewBuild(classpath) =>
+                    classLoaderFromClasspath(classpath)
+                  case SameBuild =>
+                    null
                 }
               }
-            }.fold(
-              t => FailedBuild(t),
-              identity[BuildResult]
-            )
-          } else {
-            SameBuild
-          }
+            }
 
-          val buildResult: BuildResult = build()
-          cacheBuildResultClasspath(buildResult)
-          reloadWithBuildResult(buildResult)
+
+            val buildResult: BuildResult = build()
+            cacheBuildResultClasspath(buildResult)
+            reloadWithBuildResult(buildResult)
+          }
         }
+        def forceReload() {
+          forceReloadNextTime = true
+        }
+        def close() = {
+          currentApplicationClassLoader = None
+        }
+        def getClassLoader = currentApplicationClassLoader
       }
+
 
       lazy val settings = {
         import scala.collection.JavaConverters._
         extracted.get(devSettings).toMap.asJava
-      }
-
-      def forceReload() {
-        forceReloadNextTime = true
       }
 
       def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] = {
@@ -288,22 +311,6 @@ trait PlayReloader {
         }).map(remapProblemForGeneratedSources)
       }
 
-      private def taskFailureHandler(incomplete: Incomplete): Exception = {
-        // We force reload next time because compilation failed this time
-        forceReloadNextTime = true
-        Incomplete.allExceptions(incomplete).headOption.map {
-          case e: PlayException => e
-          case e: xsbti.CompileFailed =>
-            getProblems(incomplete)
-              .find(_.severity == xsbti.Severity.Error)
-              .map(CompilationException)
-              .getOrElse(UnexpectedException(Some("The compilation failed without reporting any problem!"), Some(e)))
-          case e: Exception => UnexpectedException(unexpected = Some(e))
-        }.getOrElse {
-          UnexpectedException(Some("The compilation task failed without any exception!"))
-        }
-      }
-
       def runTask(task: String): AnyRef = {
         val parser = Act.scopedKeyParser(state)
         val Right(sk) = complete.DefaultParsers.result(parser, task)
@@ -313,12 +320,10 @@ trait PlayReloader {
       }
 
       def close() = {
-        currentApplicationClassLoader = None
+        applicationLink.close()
         currentAnalysis = None
         watcher.stop()
       }
-
-      def getClassLoader = currentApplicationClassLoader
     }
 
   }

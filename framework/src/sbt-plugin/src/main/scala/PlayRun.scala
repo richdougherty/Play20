@@ -286,7 +286,7 @@ trait PlayRun extends PlayInternalKeys {
      * to the applicationLoader, creating a full circle for resource loading.
      */
     lazy val delegatingLoader: ClassLoader = new DelegatingClassLoader(commonClassLoader, buildLoader, new ApplicationClassLoaderProvider {
-      def get: ClassLoader = { reloader.getClassLoader.orNull }
+      def get: ClassLoader = { reloader.applicationLink.getClassLoader.orNull }
     })
 
     lazy val applicationLoader = dependencyClassLoader("PlayDependencyClassLoader", urls(dependencyClasspath), delegatingLoader)
@@ -310,8 +310,8 @@ trait PlayRun extends PlayInternalKeys {
         val mainClass = applicationLoader.loadClass("play.core.server.NettyServer")
         val devModeConfig = new DevModeConfig {
           override val applicationBuildLink = new ApplicationBuildLink {
-            override def reload(): java.lang.Object = reloader.reload()
-            override def forceReload(): Unit = reloader.forceReload()
+            override def reload(): java.lang.Object = reloader.applicationLink.reload()
+            override def forceReload(): Unit = reloader.applicationLink.forceReload()
             override def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] =
               reloader.findSource(className, line)
           }
