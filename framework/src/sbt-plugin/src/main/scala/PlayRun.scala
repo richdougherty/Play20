@@ -277,7 +277,7 @@ trait PlayRun extends PlayInternalKeys {
       cachedCommonClassLoader(commonClasspath),
       buildLoader,
       new ApplicationClassLoaderProvider {
-        def get: ClassLoader = { reloader.applicationLink.getClassLoader.orNull }
+        def get: ClassLoader = { applicationLink.getClassLoader.orNull }
       }
     )
 
@@ -286,8 +286,10 @@ trait PlayRun extends PlayInternalKeys {
     }
     lazy val assetsLoader = assetsClassLoader(applicationLoader)
 
-    lazy val reloader: PlayBuildLink = newReloader(state, playReload, reloaderClasspathTask, assetsLoader,
+    lazy val reloader: PlayBuildLink = newReloader(state, playReload, reloaderClasspathTask,
       monitoredFiles, playWatchService)
+
+    lazy val applicationLink: PlayApplicationLink = new PlayApplicationLink(reloader.sbtLink, assetsLoader)
 
     try {
       // Now we're about to start, let's call the hooks:
@@ -304,10 +306,10 @@ trait PlayRun extends PlayInternalKeys {
         val mainClass = applicationLoader.loadClass("play.core.server.NettyServer")
         val devModeConfig = new DevModeConfig {
           override val applicationBuildLink = new ApplicationBuildLink {
-            override def reload(): java.lang.Object = reloader.applicationLink.reload()
-            override def forceReload(): Unit = reloader.applicationLink.forceReload()
+            override def reload(): java.lang.Object = applicationLink.reload()
+            override def forceReload(): Unit = applicationLink.forceReload()
             override def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] =
-              reloader.applicationLink.findSource(className, line)
+              applicationLink.findSource(className, line)
           }
           override val buildDocHandler: BuildDocHandler = {
             val docHandlerFactoryClass = docsLoader.loadClass("play.docs.BuildDocHandlerFactory")

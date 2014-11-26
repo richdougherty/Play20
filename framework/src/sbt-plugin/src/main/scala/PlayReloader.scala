@@ -44,6 +44,7 @@ trait PlayReloader {
   trait PlaySbtLink {
     def build(): BuildResult
     def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object]
+    def runTask(task: String): AnyRef
     def close(): Unit
   }
 
@@ -139,7 +140,6 @@ trait PlayReloader {
    */
   trait PlayBuildLink {
     def sbtLink: PlaySbtLink
-    def applicationLink: PlayApplicationLink
     def projectPath(): File
     def settings(): java.util.Map[String, String]
     def close(): Unit
@@ -151,7 +151,6 @@ trait PlayReloader {
   def newReloader(state: State,
     playReload: TaskKey[sbt.inc.Analysis],
     classpathTask: TaskKey[Classpath],
-    baseLoader: ClassLoader,
     monitoredFiles: Seq[String],
     playWatchService: PlayWatchService): PlayBuildLink = {
 
@@ -322,30 +321,27 @@ trait PlayReloader {
           }.orNull
         }
 
+        def runTask(task: String): AnyRef = {
+          val parser = Act.scopedKeyParser(state)
+          val Right(sk) = complete.DefaultParsers.result(parser, task)
+          val result = Project.runTask(sk.asInstanceOf[Def.ScopedKey[Task[AnyRef]]], state).map(_._2)
+
+          result.flatMap(_.toEither.right.toOption).orNull
+        }
+
         def close() = {
           currentAnalysis = None
           watcher.stop()
         }
       }
 
-      val applicationLink = new PlayApplicationLink(sbtLink, baseLoader)
-
       lazy val settings = {
         import scala.collection.JavaConverters._
         extracted.get(devSettings).toMap.asJava
       }
 
-      def runTask(task: String): AnyRef = {
-        val parser = Act.scopedKeyParser(state)
-        val Right(sk) = complete.DefaultParsers.result(parser, task)
-        val result = Project.runTask(sk.asInstanceOf[Def.ScopedKey[Task[AnyRef]]], state).map(_._2)
-
-        result.flatMap(_.toEither.right.toOption).orNull
-      }
-
       def close() = {
         sbtLink.close()
-        applicationLink.close()
       }
     }
 
