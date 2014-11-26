@@ -144,8 +144,6 @@ trait PlayReloader {
    */
   trait PlayBuildLink {
     def sbtLink: PlaySbtLink
-    def projectPath(): File
-    def settings(): java.util.Map[String, String]
     def close(): Unit
   }
 
@@ -159,11 +157,7 @@ trait PlayReloader {
     monitoredFiles: Seq[String],
     playWatchService: PlayWatchService): PlayBuildLink = {
 
-    val extracted = Project.extract(state)
-
     new PlayBuildLink {
-
-      lazy val projectPath = extracted.currentProject.base
 
       val sbtLink = new PlaySbtLink {
         // Whether any source files have changed since the last request.
@@ -361,11 +355,6 @@ trait PlayReloader {
           currentAnalysis = None
           watcher.stop()
         }
-      }
-
-      lazy val settings = {
-        import scala.collection.JavaConverters._
-        extracted.get(devSettings).toMap.asJava
       }
 
       def close() = {

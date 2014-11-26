@@ -203,7 +203,9 @@ trait PlayRun extends PlayInternalKeys {
     allAssets: Seq[(String, File)],
     httpPort: Option[Int],
     httpsPort: Option[Int],
-    systemProperties: Seq[(String, String)]
+    systemProperties: Seq[(String, String)],
+    projectPath: File,
+    settings: java.util.Map[String, String]
   ) {
     assert(httpPort.isDefined || httpsPort.isDefined)
   }
@@ -228,11 +230,14 @@ trait PlayRun extends PlayInternalKeys {
 
     println()
 
+
     val reloader: PlayBuildLink = newReloader(state, runHooks, playReload, reloaderClasspathTask,
       monitoredFiles, playWatchService)
 
     // Get the Files from a Classpath
     def files(cp: Classpath): Seq[File] = cp.map(_.data)//.toURI.toURL).toArray
+
+    val extracted = Project.extract(state)
 
     startDevMode(PlayDevModeConfig(
       commonClasspath = files(commonClasspath),
@@ -241,8 +246,12 @@ trait PlayRun extends PlayInternalKeys {
       allAssets = allAssets,
       systemProperties = properties ++ systemProperties,
       httpPort = httpPort,
-      httpsPort = httpsPort
-    ), reloader)
+      httpsPort = httpsPort,
+      projectPath = extracted.currentProject.base,
+      settings = {
+        import scala.collection.JavaConverters._
+        extracted.get(devSettings).toMap.asJava
+      }), reloader)
   }
 
   private def startDevMode(config: PlayDevModeConfig, reloader: PlayBuildLink /* TODO: rename */): PlayDevServer = {
@@ -343,8 +352,8 @@ trait PlayRun extends PlayInternalKeys {
             val factoryMethod = docHandlerFactoryClass.getMethod("fromJar", classOf[JarFile], classOf[String])
             factoryMethod.invoke(null, docsJarFile, "play/docs/content").asInstanceOf[BuildDocHandler]
           }
-          override val projectPath: File = reloader.projectPath
-          override val settings: java.util.Map[String, String] = reloader.settings
+          override val projectPath: File = config.projectPath
+          override val settings: java.util.Map[String, String] = config.settings
         }
         if (config.httpPort.isDefined) {
           val mainDev = mainClass.getMethod("mainDevHttpMode", classOf[DevModeConfig], classOf[Int])
