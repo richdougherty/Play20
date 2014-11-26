@@ -56,7 +56,7 @@ trait PlayRun extends PlayInternalKeys {
   private def filterArgs(args: Seq[String], defaultHttpPort: Int): (Seq[(String, String)], Option[Int], Option[Int]) = {
     val (properties, others) = args.span(_.startsWith("-D"))
 
-    val javaProperties = properties.map(_.drop(2).split('=')).map(a => a(0) -> a(1)).toSeq
+    val javaProperties: Seq[(String, String)] = properties.map(_.drop(2).split('=')).map(a => a(0) -> a(1)).toSeq
 
     // collect arguments plus config file property if present
     val httpPort = Option(System.getProperty("http.port"))
@@ -70,7 +70,7 @@ trait PlayRun extends PlayInternalKeys {
   }
 
   val playDefaultRunTask = playRunTask(playRunHooks, playDependencyClasspath,
-    playReloaderClasspath, playAssetsClassLoader)
+    playReloaderClasspath, playAllAssets)
 
   /**
    * This method is public API, used by sbt-echo, which is used by Activator:
@@ -83,7 +83,7 @@ trait PlayRun extends PlayInternalKeys {
   def playRunTask(runHooks: TaskKey[Seq[play.PlayRunHook]],
     dependencyClasspath: TaskKey[Classpath],
     reloaderClasspath: TaskKey[Classpath],
-    assetsClassLoader: TaskKey[ClassLoader => ClassLoader]): Def.Initialize[InputTask[Unit]] = Def.inputTask {
+    allAssets: TaskKey[Seq[(String, File)]]): Def.Initialize[InputTask[Unit]] = Def.inputTask {
 
     val args = Def.spaceDelimited().parsed
 
@@ -96,7 +96,7 @@ trait PlayRun extends PlayInternalKeys {
       (javaOptions in Runtime).value,
       dependencyClasspath.value,
       reloaderClasspath,
-      assetsClassLoader.value,
+      allAssets.value,
       playCommonClasspath.value,
       playMonitoredFiles.value,
       playWatchService.value,
@@ -196,6 +196,18 @@ trait PlayRun extends PlayInternalKeys {
     // val buildLink: BuildLink
   }
 
+  case class PlayDevModeConfig(
+    commonClasspath: Seq[File],
+    dependencyClasspath: Seq[File],
+    docsClasspath: Seq[File],
+    allAssets: Seq[(String, File)],
+    httpPort: Option[Int],
+    httpsPort: Option[Int],
+    systemProperties: Seq[(String, String)]
+  ) {
+    assert(httpPort.isDefined || httpsPort.isDefined)
+  }
+
   /**
    * Start the Play server in dev mode
    *
@@ -204,7 +216,7 @@ trait PlayRun extends PlayInternalKeys {
   private def startDevMode(state: State, runHooks: Seq[play.PlayRunHook], javaOptions: Seq[String],
     dependencyClasspath: Classpath,
     reloaderClasspathTask: TaskKey[Classpath],
-    assetsClassLoader: ClassLoader => ClassLoader, commonClasspath: Classpath,
+    allAssets: Seq[(String, File)], commonClasspath: Classpath,
     monitoredFiles: Seq[String], playWatchService: PlayWatchService,
     docsClasspath: Classpath, interaction: PlayInteractionMode, defaultHttpPort: Int,
     args: Seq[String]): PlayDevServer = {
@@ -214,12 +226,26 @@ trait PlayRun extends PlayInternalKeys {
 
     require(httpPort.isDefined || httpsPort.isDefined, "You have to specify https.port when http.port is disabled")
 
-    // Set Java properties
-    (properties ++ systemProperties).foreach {
-      case (key, value) => System.setProperty(key, value)
-    }
-
     println()
+
+    val reloader: PlayBuildLink = newReloader(state, runHooks, playReload, reloaderClasspathTask,
+      monitoredFiles, playWatchService)
+
+    // Get the Files from a Classpath
+    def files(cp: Classpath): Seq[File] = cp.map(_.data)//.toURI.toURL).toArray
+
+    startDevMode(PlayDevModeConfig(
+      commonClasspath = files(commonClasspath),
+      dependencyClasspath = files(dependencyClasspath),
+      docsClasspath = files(docsClasspath),
+      allAssets = allAssets,
+      systemProperties = properties ++ systemProperties,
+      httpPort = httpPort,
+      httpsPort = httpsPort
+    ), reloader)
+  }
+
+  private def startDevMode(config: PlayDevModeConfig, reloader: PlayBuildLink /* TODO: rename */): PlayDevServer = {
 
     /*
      * We need to do a bit of classloader magic to run the Play application.
@@ -263,10 +289,9 @@ trait PlayRun extends PlayInternalKeys {
      * use some attention.
      */
 
-    // Get the URLs for the resources in a classpath
-    def urls(cp: Classpath): Array[URL] = cp.map(_.data.toURI.toURL).toArray
-
     val buildLoader = this.getClass.getClassLoader
+
+    def urls(files: Seq[File]): Array[URL] = files.map(_.toURI.toURL).toArray
 
     /**
      * ClassLoader that delegates loading of shared build link classes to the
@@ -274,32 +299,34 @@ trait PlayRun extends PlayInternalKeys {
      * to the applicationLoader, creating a full circle for resource loading.
      */
     lazy val delegatingLoader: ClassLoader = new DelegatingClassLoader(
-      cachedCommonClassLoader(commonClasspath),
+      cachedCommonClassLoader(urls(config.commonClasspath)),
       buildLoader,
       new ApplicationClassLoaderProvider {
         def get: ClassLoader = { applicationLink.getClassLoader.orNull }
       }
     )
 
-    lazy val applicationLoader = new URLClassLoader(urls(dependencyClasspath), delegatingLoader) {
+    lazy val applicationLoader = new URLClassLoader(urls(config.dependencyClasspath), delegatingLoader) {
       override def toString = "PlayDependencyClassLoader{" + getURLs.map(_.toString).mkString(", ") + "}"
     }
-    lazy val assetsLoader = assetsClassLoader(applicationLoader)
-
-    lazy val reloader: PlayBuildLink = newReloader(state, playReload, reloaderClasspathTask,
-      monitoredFiles, playWatchService)
+    lazy val assetsLoader = new AssetsClassLoader(applicationLoader, config.allAssets)
 
     lazy val applicationLink: PlayApplicationLink = new PlayApplicationLink(reloader.sbtLink, assetsLoader)
 
+    // Set Java properties
+    config.systemProperties.foreach {
+      case (key, value) => System.setProperty(key, value)
+    }
+
     try {
       // Now we're about to start, let's call the hooks:
-      runHooks.run(_.beforeStarted())
+      reloader.sbtLink.beforeRunStarted()
 
       // Get a handler for the documentation. The documentation content lives in play/docs/content
       // within the play-docs JAR.
-      val docsLoader = new URLClassLoader(urls(docsClasspath), applicationLoader)
+      val docsLoader = new URLClassLoader(urls(config.docsClasspath), applicationLoader)
       val docsJarFile = {
-        val f = docsClasspath.map(_.data).filter(_.getName.startsWith("play-docs")).head
+        val f = config.docsClasspath.filter(_.getName.startsWith("play-docs")).head
         new JarFile(f)
       }
       val server = {
@@ -319,17 +346,17 @@ trait PlayRun extends PlayInternalKeys {
           override val projectPath: File = reloader.projectPath
           override val settings: java.util.Map[String, String] = reloader.settings
         }
-        if (httpPort.isDefined) {
+        if (config.httpPort.isDefined) {
           val mainDev = mainClass.getMethod("mainDevHttpMode", classOf[DevModeConfig], classOf[Int])
-          mainDev.invoke(null, devModeConfig, httpPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
+          mainDev.invoke(null, devModeConfig, config.httpPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
         } else {
           val mainDev = mainClass.getMethod("mainDevOnlyHttpsMode", classOf[DevModeConfig], classOf[Int])
-          mainDev.invoke(null, devModeConfig, httpsPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
+          mainDev.invoke(null, devModeConfig, config.httpsPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
         }
       }
 
       // Notify hooks
-      runHooks.run(_.afterStarted(server.mainAddress))
+      reloader.sbtLink.afterRunStarted(server.mainAddress)
 
       new PlayDevServer {
         val buildLink = reloader
@@ -340,24 +367,17 @@ trait PlayRun extends PlayInternalKeys {
           reloader.close()
 
           // Notify hooks
-          runHooks.run(_.afterStopped())
+          reloader.sbtLink.afterRunStopped()
 
           // Remove Java properties
-          properties.foreach {
+          config.systemProperties.foreach {
             case (key, _) => System.clearProperty(key)
           }
         }
       }
     } catch {
       case e: Throwable =>
-        // Let hooks clean up
-        runHooks.foreach { hook =>
-          try {
-            hook.onError()
-          } catch {
-            case e: Throwable => // Swallow any exceptions so that all `onError`s get called.
-          }
-        }
+        reloader.sbtLink.onRunError()
         throw e
     }
   }
@@ -377,9 +397,9 @@ trait PlayRun extends PlayInternalKeys {
     }
   }
 
-  val playAssetsClassLoaderSetting = playAssetsClassLoader := { parent =>
-    new AssetsClassLoader(parent, playAllAssets.value)
-  }
+  // val playAssetsClassLoaderSetting = playAssetsClassLoader := { parent =>
+  //   new AssetsClassLoader(parent, playAllAssets.value)
+  // }
 
   val playPrefixAndPipelineSetting = playPrefixAndPipeline := {
     assetsPrefix.value -> (WebKeys.pipeline in Assets).value

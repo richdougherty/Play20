@@ -235,7 +235,7 @@ trait PlaySettings {
     // Assets for run mode
     playPrefixAndAssetsSetting,
     playAllAssetsSetting,
-    playAssetsClassLoaderSetting,
+    // playAssetsClassLoaderSetting,
     assetsPrefix := "public/",
 
     // Assets for distribution

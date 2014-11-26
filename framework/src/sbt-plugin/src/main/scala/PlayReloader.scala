@@ -3,7 +3,7 @@
  */
 package play
 
-import java.net.URLClassLoader
+import java.net.{ InetSocketAddress, URL, URLClassLoader }
 import play.runsupport.PlayWatchService
 import play.sbtplugin.run._
 import play.api._
@@ -23,15 +23,15 @@ trait PlayReloader {
 
   private var commonClassLoaderCache: ClassLoader = null
 
-  protected def cachedCommonClassLoader(commonClasspath: Classpath): ClassLoader = {
+  protected def cachedCommonClassLoader(commonClasspath: Seq[URL]): ClassLoader = {
     if (commonClassLoaderCache == null) {
       commonClassLoaderCache = createCommonClassLoaderFromClasspath(commonClasspath)
     }
     commonClassLoaderCache
   }
 
-  private def createCommonClassLoaderFromClasspath(commonClasspath: Classpath): ClassLoader = {
-    new URLClassLoader(commonClasspath.map(_.data.toURI.toURL).to[Array], null /* important here, don't depend of the sbt classLoader! */ ) {
+  private def createCommonClassLoaderFromClasspath(commonClasspath: Seq[URL]): ClassLoader = {
+    new URLClassLoader(commonClasspath.to[Array], null /* important here, don't depend of the sbt classLoader! */ ) {
       override def toString = "Common ClassLoader: " + getURLs.map(_.toString).mkString(",")
     }
   }
@@ -45,6 +45,10 @@ trait PlayReloader {
     def build(): BuildResult
     def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object]
     def runTask(task: String): AnyRef
+    def beforeRunStarted(): Unit
+    def afterRunStarted(address: InetSocketAddress): Unit
+    def afterRunStopped(): Unit
+    def onRunError(): Unit
     def close(): Unit
   }
 
@@ -149,6 +153,7 @@ trait PlayReloader {
    * Create a new reloader
    */
   def newReloader(state: State,
+    runHooks: Seq[play.PlayRunHook],
     playReload: TaskKey[sbt.inc.Analysis],
     classpathTask: TaskKey[Classpath],
     monitoredFiles: Seq[String],
@@ -327,6 +332,29 @@ trait PlayReloader {
           val result = Project.runTask(sk.asInstanceOf[Def.ScopedKey[Task[AnyRef]]], state).map(_._2)
 
           result.flatMap(_.toEither.right.toOption).orNull
+        }
+
+        def beforeRunStarted(): Unit = {
+          runHooks.run(_.beforeStarted())
+        }
+
+        def afterRunStarted(address: InetSocketAddress): Unit = {
+          runHooks.run(_.afterStarted(address))
+        }
+
+        def afterRunStopped(): Unit = {
+          runHooks.run(_.afterStopped())
+        }
+
+        def onRunError(): Unit = {
+          // Let hooks clean up
+          runHooks.foreach { hook =>
+            try {
+              hook.onError()
+            } catch {
+              case e: Throwable => // Swallow any exceptions so that all `onError`s get called.
+            }
+          }
         }
 
         def close() = {
