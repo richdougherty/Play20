@@ -310,7 +310,7 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
   val h2Command = Command.command("h2-browser") { state: State =>
     try {
       val commonClasspath = Project.runTask(playCommonClasspath, state).get._2.toEither.right.get
-      val commonLoader = cachedCommonClassLoader(commonClasspath.map(_.data.toURI.toURL))
+      val commonLoader = commonClassLoaderProvider.getOrElseUseClasspath(commonClasspath.map(_.data))
       val h2ServerClass = commonLoader.loadClass(classOf[org.h2.tools.Server].getName)
       h2ServerClass.getMethod("main", classOf[Array[String]]).invoke(null, Array.empty[String])
     } catch {

@@ -12,15 +12,13 @@ import play.PlayImport._
 import PlayKeys._
 import play.sbtplugin.Colors
 import play.core.buildlink.application._
-import play.core.classloader._
 import annotation.tailrec
 import scala.collection.JavaConverters._
 import java.net.URLClassLoader
-import java.util.jar.JarFile
 import com.typesafe.sbt.SbtNativePackager._
 import com.typesafe.sbt.packager.Keys._
 import com.typesafe.sbt.web.SbtWeb.autoImport._
-import play.runsupport.{ PlayWatchService, AssetsClassLoader }
+import play.runsupport.PlayWatchService
 import play.sbtplugin.run._
 
 /**
@@ -190,27 +188,6 @@ trait PlayRun extends PlayInternalKeys {
   }
 
   /**
-   * Play dev server
-   */
-  private trait PlayDevServer extends Closeable {
-    // val buildLink: BuildLink
-  }
-
-  case class PlayDevModeConfig(
-    commonClasspath: Seq[File],
-    dependencyClasspath: Seq[File],
-    docsClasspath: Seq[File],
-    allAssets: Seq[(String, File)],
-    httpPort: Option[Int],
-    httpsPort: Option[Int],
-    systemProperties: Seq[(String, String)],
-    projectPath: File,
-    settings: java.util.Map[String, String]
-  ) {
-    assert(httpPort.isDefined || httpsPort.isDefined)
-  }
-
-  /**
    * Start the Play server in dev mode
    *
    * @return A closeable that can be closed to stop the server
@@ -221,7 +198,7 @@ trait PlayRun extends PlayInternalKeys {
     allAssets: Seq[(String, File)], commonClasspath: Classpath,
     monitoredFiles: Seq[String], playWatchService: PlayWatchService,
     docsClasspath: Classpath, interaction: PlayInteractionMode, defaultHttpPort: Int,
-    args: Seq[String]): PlayDevServer = {
+    args: Seq[String]): Closeable = {
 
     val (properties, httpPort, httpsPort) = filterArgs(args, defaultHttpPort = defaultHttpPort)
     val systemProperties = extractSystemProperties(javaOptions)
@@ -231,7 +208,7 @@ trait PlayRun extends PlayInternalKeys {
     println()
 
 
-    val reloader: PlayBuildLink = newReloader(state, runHooks, playReload, reloaderClasspathTask,
+    val sbtLink: PlayDevServer.SbtLink = newReloader(state, runHooks, playReload, reloaderClasspathTask,
       monitoredFiles, playWatchService)
 
     // Get the Files from a Classpath
@@ -239,7 +216,7 @@ trait PlayRun extends PlayInternalKeys {
 
     val extracted = Project.extract(state)
 
-    startDevMode(PlayDevModeConfig(
+    val config = PlayDevServer.Config(
       commonClasspath = files(commonClasspath),
       dependencyClasspath = files(dependencyClasspath),
       docsClasspath = files(docsClasspath),
@@ -251,144 +228,10 @@ trait PlayRun extends PlayInternalKeys {
       settings = {
         import scala.collection.JavaConverters._
         extracted.get(devSettings).toMap.asJava
-      }), reloader)
-  }
-
-  private def startDevMode(config: PlayDevModeConfig, reloader: PlayBuildLink /* TODO: rename */): PlayDevServer = {
-
-    /*
-     * We need to do a bit of classloader magic to run the Play application.
-     *
-     * There are seven classloaders:
-     *
-     * 1. buildLoader, the classloader of sbt and the Play sbt plugin.
-     * 2. commonLoader, a classloader that persists across calls to run.
-     *    This classloader is stored inside the
-     *    PlayInternalKeys.playCommonClassloader task. This classloader will
-     *    load the classes for the H2 database if it finds them in the user's
-     *    classpath. This allows H2's in-memory database state to survive across
-     *    calls to run.
-     * 3. delegatingLoader, a special classloader that overrides class loading
-     *    to delegate shared classes for build link to the buildLoader, and accesses
-     *    the reloader.currentApplicationClassLoader for resource loading to
-     *    make user resources available to dependency classes.
-     *    Has the commonLoader as its parent.
-     * 4. applicationLoader, contains the application dependencies. Has the
-     *    delegatingLoader as its parent. Classes from the commonLoader and
-     *    the delegatingLoader are checked for loading first.
-     * 5. docsLoader, the classloader for the special play-docs application
-     *    that is used to serve documentation when running in development mode.
-     *    Has the applicationLoader as its parent for Play dependencies and
-     *    delegation to the shared sbt doc link classes.
-     * 6. playAssetsClassLoader, serves assets from all projects, prefixed as
-     *    configured.  It does no caching, and doesn't need to be reloaded each
-     *    time the assets are rebuilt.
-     * 7. reloader.currentApplicationClassLoader, contains the user classes
-     *    and resources. Has applicationLoader as its parent, where the
-     *    application dependencies are found, and which will delegate through
-     *    to the buildLoader via the delegatingLoader for the shared link.
-     *    Resources are actually loaded by the delegatingLoader, where they
-     *    are available to both the reloader and the applicationLoader.
-     *    This classloader is recreated on reload. See PlayReloader.
-     *
-     * Someone working on this code in the future might want to tidy things up
-     * by splitting some of the custom logic out of the URLClassLoaders and into
-     * their own simpler ClassLoader implementations. The curious cycle between
-     * applicationLoader and reloader.currentApplicationClassLoader could also
-     * use some attention.
-     */
-
-    val buildLoader = this.getClass.getClassLoader
-
-    def urls(files: Seq[File]): Array[URL] = files.map(_.toURI.toURL).toArray
-
-    /**
-     * ClassLoader that delegates loading of shared build link classes to the
-     * buildLoader. Also accesses the reloader resources to make these available
-     * to the applicationLoader, creating a full circle for resource loading.
-     */
-    lazy val delegatingLoader: ClassLoader = new DelegatingClassLoader(
-      cachedCommonClassLoader(urls(config.commonClasspath)),
-      buildLoader,
-      new ApplicationClassLoaderProvider {
-        def get: ClassLoader = { applicationLink.getClassLoader.orNull }
       }
     )
 
-    lazy val applicationLoader = new URLClassLoader(urls(config.dependencyClasspath), delegatingLoader) {
-      override def toString = "PlayDependencyClassLoader{" + getURLs.map(_.toString).mkString(", ") + "}"
-    }
-    lazy val assetsLoader = new AssetsClassLoader(applicationLoader, config.allAssets)
-
-    lazy val applicationLink: PlayApplicationLink = new PlayApplicationLink(reloader.sbtLink, assetsLoader)
-
-    // Set Java properties
-    config.systemProperties.foreach {
-      case (key, value) => System.setProperty(key, value)
-    }
-
-    try {
-      // Now we're about to start, let's call the hooks:
-      reloader.sbtLink.beforeRunStarted()
-
-      // Get a handler for the documentation. The documentation content lives in play/docs/content
-      // within the play-docs JAR.
-      val docsLoader = new URLClassLoader(urls(config.docsClasspath), applicationLoader)
-      val docsJarFile = {
-        val f = config.docsClasspath.filter(_.getName.startsWith("play-docs")).head
-        new JarFile(f)
-      }
-      val server = {
-        val mainClass = applicationLoader.loadClass("play.core.server.NettyServer")
-        val devModeConfig = new DevModeConfig {
-          override val applicationBuildLink = new ApplicationBuildLink {
-            override def reload(): java.lang.Object = applicationLink.reload()
-            override def forceReload(): Unit = applicationLink.forceReload()
-            override def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] =
-              applicationLink.findSource(className, line)
-          }
-          override val buildDocHandler: BuildDocHandler = {
-            val docHandlerFactoryClass = docsLoader.loadClass("play.docs.BuildDocHandlerFactory")
-            val factoryMethod = docHandlerFactoryClass.getMethod("fromJar", classOf[JarFile], classOf[String])
-            factoryMethod.invoke(null, docsJarFile, "play/docs/content").asInstanceOf[BuildDocHandler]
-          }
-          override val projectPath: File = config.projectPath
-          override val settings: java.util.Map[String, String] = config.settings
-        }
-        if (config.httpPort.isDefined) {
-          val mainDev = mainClass.getMethod("mainDevHttpMode", classOf[DevModeConfig], classOf[Int])
-          mainDev.invoke(null, devModeConfig, config.httpPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
-        } else {
-          val mainDev = mainClass.getMethod("mainDevOnlyHttpsMode", classOf[DevModeConfig], classOf[Int])
-          mainDev.invoke(null, devModeConfig, config.httpsPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
-        }
-      }
-
-      // Notify hooks
-      reloader.sbtLink.afterRunStarted(server.mainAddress)
-
-      new PlayDevServer {
-        val buildLink = reloader
-
-        def close() = {
-          server.stop()
-          docsJarFile.close()
-          reloader.close()
-
-          // Notify hooks
-          reloader.sbtLink.afterRunStopped()
-
-          // Remove Java properties
-          config.systemProperties.foreach {
-            case (key, _) => System.clearProperty(key)
-          }
-        }
-      }
-    } catch {
-      case e: Throwable =>
-        reloader.sbtLink.onRunError()
-        throw e
-    }
+    PlayDevServer.start(commonClassLoaderProvider, config, sbtLink)
   }
 
   val playPrefixAndAssetsSetting = playPrefixAndAssets := {
