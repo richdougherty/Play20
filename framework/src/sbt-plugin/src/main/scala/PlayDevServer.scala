@@ -90,14 +90,16 @@ object PlayDevServer {
 
     def urls(files: Seq[File]): Array[URL] = files.map(_.toURI.toURL).toArray
 
+    val commonLoader = commonClassLoaderProvider.getOrElseUseClasspath(config.commonClasspath)
+    val commonAndBuildLoader = new CombiningBuildClassLoader(commonLoader, buildLoader)
+
     /**
      * ClassLoader that delegates loading of shared build link classes to the
      * buildLoader. Also accesses the reloader resources to make these available
      * to the applicationLoader, creating a full circle for resource loading.
      */
     lazy val delegatingLoader: ClassLoader = new DelegatingClassLoader(
-      commonClassLoaderProvider.getOrElseUseClasspath(config.commonClasspath),
-      buildLoader,
+      commonAndBuildLoader,
       new ApplicationClassLoaderProvider {
         def get: ClassLoader = { applicationLink.getClassLoader.orNull }
       }

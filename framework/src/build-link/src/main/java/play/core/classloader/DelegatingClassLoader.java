@@ -14,42 +14,11 @@ import java.util.Vector;
 
 public class DelegatingClassLoader extends ClassLoader {
 
-  private static final List<String> buildSharedClasses;
-  static {
-    List<String> list = new ArrayList<String>();
-    list.add(play.core.buildlink.application.ApplicationBuildLink.class.getName());
-    list.add(play.core.buildlink.application.BuildDocHandler.class.getName());
-    list.add(play.core.buildlink.application.DevModeConfig.class.getName());
-    list.add(play.core.buildlink.application.DevModeServer.class.getName());
-    list.add(play.api.UsefulException.class.getName());
-    list.add(play.api.PlayException.class.getName());
-    list.add(play.api.PlayException.InterestingLines.class.getName());
-    list.add(play.api.PlayException.RichDescription.class.getName());
-    list.add(play.api.PlayException.ExceptionSource.class.getName());
-    list.add(play.api.PlayException.ExceptionAttachment.class.getName());
-    buildSharedClasses = Collections.unmodifiableList(list);
-  }
-
-  private ClassLoader buildLoader;
   private ApplicationClassLoaderProvider applicationClassLoaderProvider;
 
-  public DelegatingClassLoader(ClassLoader commonLoader, ClassLoader buildLoader, ApplicationClassLoaderProvider applicationClassLoaderProvider) {
-    super(commonLoader);
-    this.buildLoader = buildLoader;
+  public DelegatingClassLoader(ClassLoader parentLoader, ApplicationClassLoaderProvider applicationClassLoaderProvider) {
+    super(parentLoader);
     this.applicationClassLoaderProvider = applicationClassLoaderProvider;
-  }
-
-  public static boolean isSharedClass(String name) {
-    return buildSharedClasses.contains(name);
-  }
-
-  @Override
-  public Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-    if (isSharedClass(name)) {
-      return buildLoader.loadClass(name);
-    } else {
-      return super.loadClass(name, resolve);
-    }
   }
 
   @Override
@@ -66,7 +35,7 @@ public class DelegatingClassLoader extends ClassLoader {
     URL resource = null;
     if (appClassLoader != null) {    
       try {
-        resource = (URL) findResource.invoke(appClassLoader, name);
+        return (URL) findResource.invoke(appClassLoader, name);
       } catch (IllegalAccessException e) {
         throw new IllegalStateException(e);
       } catch (InvocationTargetException e) {
