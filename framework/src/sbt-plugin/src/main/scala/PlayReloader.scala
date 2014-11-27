@@ -32,7 +32,7 @@ trait PlayReloader {
     playReload: TaskKey[sbt.inc.Analysis],
     classpathTask: TaskKey[Classpath],
     monitoredFiles: Seq[String],
-    playWatchService: PlayWatchService): SbtLink with Closeable = new SbtLink with Closeable {
+    playWatchService: PlayWatchService): SbtLink = new SbtLink {
 
     // Whether any source files have changed since the last request.
     @volatile private var changed = false
