@@ -85,6 +85,10 @@ trait PlaySettings {
     },
     libraryDependencies += "com.typesafe.play" %% "play-test" % play.core.PlayVersion.current % "test",
 
+    ivyConfigurations += ReloaderApplication,
+    libraryDependencies += "com.typesafe.play" %% "play-reloader" % play.core.PlayVersion.current % ReloaderApplication.name,
+    manageClasspath(ReloaderApplication),
+
     ivyConfigurations += DocsApplication,
     libraryDependencies += "com.typesafe.play" %% "play-docs" % play.core.PlayVersion.current % DocsApplication.name,
     manageClasspath(DocsApplication),

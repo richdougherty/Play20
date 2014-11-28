@@ -235,6 +235,9 @@ object PlayBuild extends Build {
       addScalaModules(scalaParserCombinators)
     )
 
+  lazy val PlayReloaderProject = PlayRuntimeProject("Play-Reloader", "play-reloader")
+    .dependsOn(BuildLinkProject)
+
   lazy val IterateesProject = PlayRuntimeProject("Play-Iteratees", "iteratees")
     .settings(libraryDependencies ++= iterateesDependencies)
 
@@ -460,6 +463,7 @@ object PlayBuild extends Build {
     PlayJavaJdbcProject,
     PlayEbeanProject,
     PlayJpaProject,
+    PlayReloaderProject,
     PlayWsProject,
     PlayWsJavaProject,
     SbtRunSupportProject,

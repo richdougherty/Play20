@@ -4,6 +4,7 @@
 package play.core.buildlink;
 
 import java.io.*;
+import java.net.InetSocketAddress;
 import java.util.*;
 
 /**
@@ -17,7 +18,7 @@ import java.util.*;
  */
 // Created by PlayReloader, used by PlayRun, supplied to NettyServer when started
 // in dev mode.
-public interface BuildLink {
+public interface BuildLink extends Closeable {
 
     /**
      * Check if anything has changed, and if so, return an updated classloader.
@@ -34,7 +35,7 @@ public interface BuildLink {
      * </ul>
      */
     // PLAN: Replace by buildIfChanged.
-    public Object reload();
+    public BuildResult build();
 
     /**
      * Find the original source file for the given class name and line number.
@@ -64,36 +65,6 @@ public interface BuildLink {
     public Object[] findSource(String className, Integer line);
 
     /**
-     * Get the path of the project.  This is used by methods that resolve files relative to the root of the project,
-     * such as <code>play.api.Application.getFile</code>.
-     *
-     * @return The path of the project.
-     */
-    // PLAN: Put this into a config object that is supplied to the
-    // server when it starts. It doesn't vary on each build.
-    public File projectPath();
-
-    /**
-     * Force the application to reload on the next invocation of reload.
-     *
-     * This is invoked by plugins for example that change something on the classpath or something about the application
-     * that requires a reload, for example, the evolutions plugin.
-     */
-    // PLAN: Move up a layer. When the new build() command is working it will
-    // return a classpath. Whatever calls build() can reload this classpath
-    // at any time. This method won't be needed.
-    public void forceReload();
-
-    /**
-     * Returns a list of application settings configured in the build system.
-     *
-     * @return The settings.
-     */
-    // PLAN: Put this into a config object that is supplied to the
-    // server when it starts. It doesn't vary on each build.
-    public Map<String,String> settings();
-
-    /**
      * Run a task in the build tool.
      *
      * This can be used by Play plugins, for example, by a test fixture plugin to run tests.  The format of the passed
@@ -108,4 +79,13 @@ public interface BuildLink {
     // PLAN: Remove this. In Play 2.4 maybe we can provide a module that
     // gives a handle directly to sbt server.
     public Object runTask(String task);
+
+    public void beforeRunStarted();
+
+    public void afterRunStarted(InetSocketAddress address);
+
+    public void afterRunStopped();
+
+    public void onRunError();
+
 }

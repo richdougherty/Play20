@@ -1,11 +1,11 @@
 /*
  * Copyright (C) 2009-2014 Typesafe Inc. <http://www.typesafe.com>
  */
-package play.runsupport
+package play.core.reloader
 
-import sbt._
+//import sbt._
 import java.io.File
-import Path._
+// import Path._
 
 /**
  * A ClassLoader for serving assets.
@@ -18,11 +18,11 @@ class AssetsClassLoader(parent: ClassLoader, assets: Seq[(String, File)]) extend
   override def findResource(name: String) = {
     assets.collectFirst {
       case (prefix, dir) if exists(name, prefix, dir) =>
-        (dir / name.substring(prefix.length)).toURI.toURL
+        new File(dir, name.substring(prefix.length)).toURI.toURL
     }.orNull
   }
 
   def exists(name: String, prefix: String, dir: File) = {
-    name.startsWith(prefix) && (dir / name.substring(prefix.length)).isFile
+    name.startsWith(prefix) && new File(dir, name.substring(prefix.length)).isFile
   }
 }

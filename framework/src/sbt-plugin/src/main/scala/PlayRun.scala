@@ -11,7 +11,8 @@ import Keys._
 import play.PlayImport._
 import PlayKeys._
 import play.sbtplugin.Colors
-import play.core.buildlink.application._
+import play.core.buildlink._
+import play.core.classloader.CombiningBuildClassLoader
 import annotation.tailrec
 import scala.collection.JavaConverters._
 import java.net.URLClassLoader
@@ -26,6 +27,12 @@ import play.sbtplugin.run._
  */
 trait PlayRun extends PlayInternalKeys {
   this: PlayReloader =>
+
+  /**
+   * Configuration for the Play reloader application. Used to build a classloader for
+   * that application. Hidden so that it isn't exposed when the user application is published.
+   */
+  val ReloaderApplication = config("reloader").hide
 
   /**
    * Configuration for the Play docs application's dependencies. Used to build a classloader for
@@ -98,6 +105,7 @@ trait PlayRun extends PlayInternalKeys {
       playCommonClasspath.value,
       playMonitoredFiles.value,
       playWatchService.value,
+      (managedClasspath in ReloaderApplication).value,
       (managedClasspath in DocsApplication).value,
       interaction,
       playDefaultPort.value,
@@ -197,7 +205,7 @@ trait PlayRun extends PlayInternalKeys {
     reloaderClasspathTask: TaskKey[Classpath],
     allAssets: Seq[(String, File)], commonClasspath: Classpath,
     monitoredFiles: Seq[String], playWatchService: PlayWatchService,
-    docsClasspath: Classpath, interaction: PlayInteractionMode, defaultHttpPort: Int,
+    reloaderClasspath: Classpath, docsClasspath: Classpath, interaction: PlayInteractionMode, defaultHttpPort: Int,
     args: Seq[String]): Closeable = {
 
     val (properties, httpPort, httpsPort) = filterArgs(args, defaultHttpPort = defaultHttpPort)
@@ -208,30 +216,38 @@ trait PlayRun extends PlayInternalKeys {
     println()
 
 
-    val sbtLink: PlayDevServer.SbtLink = newReloader(state, runHooks, playReload, reloaderClasspathTask,
+    val buildLink: BuildLink = newReloader(state, runHooks, playReload, reloaderClasspathTask,
       monitoredFiles, playWatchService)
 
     // Get the Files from a Classpath
-    def files(cp: Classpath): Seq[File] = cp.map(_.data)//.toURI.toURL).toArray
+    def files(cp: Classpath): Array[File] = cp.map(_.data).toArray
 
     val extracted = Project.extract(state)
 
-    val config = PlayDevServer.Config(
-      commonClasspath = files(commonClasspath),
-      dependencyClasspath = files(dependencyClasspath),
-      docsClasspath = files(docsClasspath),
-      allAssets = allAssets,
-      systemProperties = properties ++ systemProperties,
-      httpPort = httpPort,
-      httpsPort = httpsPort,
-      projectPath = extracted.currentProject.base,
-      settings = {
-        import scala.collection.JavaConverters._
-        extracted.get(devSettings).toMap.asJava
-      }
+    val config = new DevModeConfig2(
+      //commonClasspath = files(commonClasspath),
+      files(dependencyClasspath),
+      files(docsClasspath),
+      allAssets.map { case (file, relative) => new DevModeConfig2.FileMapping(relative, file) } toArray,
+      httpPort.map(new java.lang.Integer(_)).orNull,
+      httpsPort.map(new java.lang.Integer(_)).orNull,
+      (properties ++ systemProperties).toMap.asJava,
+      extracted.get(devSettings).toMap.asJava,
+      extracted.currentProject.base
     )
 
-    PlayDevServer.start(commonClassLoaderProvider, config, sbtLink)
+    val commonClasspathFiles = files(commonClasspath)
+    println("XXXXXXXXX " + commonClasspathFiles.map(_.toString).mkString(", "))
+
+    val buildLoader = this.getClass.getClassLoader
+    val commonLoader = commonClassLoaderProvider.getOrElseUseClasspath(commonClasspathFiles)
+    val commonAndBuildLoader = new CombiningBuildClassLoader(commonLoader, buildLoader)
+    val reloaderLoader = new URLClassLoader(reloaderClasspath.map(_.data.toURI.toURL).toArray, commonAndBuildLoader)
+
+    val playDevServerClass = reloaderLoader.loadClass("play.core.reloader.PlayDevServer")
+    val startMethod = playDevServerClass.getMethod("start", classOf[DevModeConfig2], classOf[BuildLink])
+    val playDevServer = playDevServerClass.newInstance()
+    startMethod.invoke(playDevServer, config, buildLink).asInstanceOf[Closeable]
   }
 
   val playPrefixAndAssetsSetting = playPrefixAndAssets := {

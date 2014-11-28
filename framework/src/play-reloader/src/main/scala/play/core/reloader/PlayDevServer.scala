@@ -1,48 +1,47 @@
-package play
+package play.core.reloader
 
 import java.io.{ Closeable, File }
 import java.net.{ InetSocketAddress, URL, URLClassLoader }
 import java.util.jar.JarFile
-import play.core.buildlink.application._
+import play.core.buildlink._
+import play.core.buildlink.application._  
 import play.core.classloader._
-import play.runsupport.AssetsClassLoader
+import scala.collection.JavaConverters._
 
+class PlayDevServer {
 
-object PlayDevServer {
+  // case class Config(
+  //   commonClasspath: Seq[File],
+  //   dependencyClasspath: Seq[File],
+  //   docsClasspath: Seq[File],
+  //   allAssets: Seq[(String, File)],
+  //   httpPort: Option[Int],
+  //   httpsPort: Option[Int],
+  //   systemProperties: Seq[(String, String)],
+  //   projectPath: File,
+  //   settings: java.util.Map[String, String]
+  // ) {
+  //   assert(httpPort.isDefined || httpsPort.isDefined)
+  // }
 
-  case class Config(
-    commonClasspath: Seq[File],
-    dependencyClasspath: Seq[File],
-    docsClasspath: Seq[File],
-    allAssets: Seq[(String, File)],
-    httpPort: Option[Int],
-    httpsPort: Option[Int],
-    systemProperties: Seq[(String, String)],
-    projectPath: File,
-    settings: java.util.Map[String, String]
-  ) {
-    assert(httpPort.isDefined || httpsPort.isDefined)
-  }
+  // sealed trait BuildResult
+  // case object SameBuild extends BuildResult
+  // case class FreshBuild(classpath: Seq[File]) extends BuildResult
+  // case class FailedBuild(t: Throwable) extends BuildResult
 
-  sealed trait BuildResult
-  case object SameBuild extends BuildResult
-  case class NewBuild(classpath: Seq[File]) extends BuildResult
-  case class FailedBuild(t: Throwable) extends BuildResult
-
-  trait SbtLink extends Closeable {
-    def build(): BuildResult
-    def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object]
-    def runTask(task: String): AnyRef
-    def beforeRunStarted(): Unit
-    def afterRunStarted(address: InetSocketAddress): Unit
-    def afterRunStopped(): Unit
-    def onRunError(): Unit
-  }
+  // trait SbtLink extends Closeable {
+  //   def build(): BuildResult
+  //   def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object]
+  //   def runTask(task: String): AnyRef
+  //   def beforeRunStarted(): Unit
+  //   def afterRunStarted(address: InetSocketAddress): Unit
+  //   def afterRunStopped(): Unit
+  //   def onRunError(): Unit
+  // }
 
   def start(
-    commonClassLoaderProvider: PlayCommonClassLoaderProvider,
-    config: Config,
-    sbtLink: SbtLink /* TODO: rename */): Closeable = {
+    config: DevModeConfig2,
+    buildLink: BuildLink): Closeable = {
 
     /*
      * We need to do a bit of classloader magic to run the Play application.
@@ -86,12 +85,7 @@ object PlayDevServer {
      * use some attention.
      */
 
-    val buildLoader = this.getClass.getClassLoader
-
     def urls(files: Seq[File]): Array[URL] = files.map(_.toURI.toURL).toArray
-
-    val commonLoader = commonClassLoaderProvider.getOrElseUseClasspath(config.commonClasspath)
-    val commonAndBuildLoader = new CombiningBuildClassLoader(commonLoader, buildLoader)
 
     /**
      * ClassLoader that delegates loading of shared build link classes to the
@@ -99,7 +93,7 @@ object PlayDevServer {
      * to the applicationLoader, creating a full circle for resource loading.
      */
     lazy val delegatingLoader: ClassLoader = new DelegatingClassLoader(
-      commonAndBuildLoader,
+      this.getClass.getClassLoader,
       new ApplicationClassLoaderProvider {
         def get: ClassLoader = { applicationLink.getClassLoader.orNull }
       }
@@ -108,18 +102,21 @@ object PlayDevServer {
     lazy val applicationLoader = new URLClassLoader(urls(config.dependencyClasspath), delegatingLoader) {
       override def toString = "PlayDependencyClassLoader{" + getURLs.map(_.toString).mkString(", ") + "}"
     }
-    lazy val assetsLoader = new AssetsClassLoader(applicationLoader, config.allAssets)
+    lazy val assetsLoader = new AssetsClassLoader(
+      applicationLoader,
+      config.allAssets.map(fm => (fm.relative, fm.file))
+    )
 
-    lazy val applicationLink: PlayApplicationLink = new PlayApplicationLink(sbtLink, assetsLoader)
+    lazy val applicationLink: PlayApplicationLink = new PlayApplicationLink(buildLink, assetsLoader)
 
     // Set Java properties
-    config.systemProperties.foreach {
+    config.systemProperties.asScala.foreach {
       case (key, value) => System.setProperty(key, value)
     }
 
     try {
       // Now we're about to start, let's call the hooks:
-      sbtLink.beforeRunStarted()
+      buildLink.beforeRunStarted()
 
       // Get a handler for the documentation. The documentation content lives in play/docs/content
       // within the play-docs JAR.
@@ -145,49 +142,51 @@ object PlayDevServer {
           override val projectPath: File = config.projectPath
           override val settings: java.util.Map[String, String] = config.settings
         }
-        if (config.httpPort.isDefined) {
+        if (config.httpPort != null) {
           val mainDev = mainClass.getMethod("mainDevHttpMode", classOf[DevModeConfig], classOf[Int])
-          mainDev.invoke(null, devModeConfig, config.httpPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
-        } else {
+          mainDev.invoke(null, devModeConfig, config.httpPort: java.lang.Integer).asInstanceOf[DevModeServer]
+        } else if (config.httpsPort != null) {
           val mainDev = mainClass.getMethod("mainDevOnlyHttpsMode", classOf[DevModeConfig], classOf[Int])
-          mainDev.invoke(null, devModeConfig, config.httpsPort.get: java.lang.Integer).asInstanceOf[DevModeServer]
+          mainDev.invoke(null, devModeConfig, config.httpsPort: java.lang.Integer).asInstanceOf[DevModeServer]
+        } else {
+          throw new IllegalArgumentException("Either httpPort or httpsPort must be provided")
         }
       }
 
       // Notify hooks
-      sbtLink.afterRunStarted(server.mainAddress)
+      buildLink.afterRunStarted(server.mainAddress)
 
       new Closeable {
         def close() = {
           server.stop()
           docsJarFile.close()
-          sbtLink.close()
+          buildLink.close()
           applicationLink.close()
 
           // Notify hooks
-          sbtLink.afterRunStopped()
+          buildLink.afterRunStopped()
 
           // Remove Java properties
-          config.systemProperties.foreach {
+          config.systemProperties.asScala.foreach {
             case (key, _) => System.clearProperty(key)
           }
         }
       }
     } catch {
       case e: Throwable =>
-        sbtLink.onRunError()
+        buildLink.onRunError()
         throw e
     }
   }
 
-  private class PlayApplicationLink(sbtLink: SbtLink, baseLoader: ClassLoader) extends Closeable {
+  private class PlayApplicationLink(buildLink: BuildLink, baseLoader: ClassLoader) extends Closeable {
     // Flag to force a reload on the next request.
     // This is set if a compile error occurs, and also by the forceReload method on BuildLink, which is called for
     // example when evolutions have been applied.
     @volatile private var forceReloadNextTime = false
     // The current classpath for the application. This value starts out empty
     // but changes on each successful new compilation.
-    @volatile private var currentApplicationClasspath: Option[Seq[File]] = None
+    @volatile private var currentApplicationClasspath: Option[Array[File]] = None
     // The current classloader for the application. This value starts out empty
     // but changes on each successful new compilation.
     @volatile private var currentApplicationClassLoader: Option[ClassLoader] = None
@@ -195,8 +194,9 @@ object PlayDevServer {
     private val classLoaderVersion = new java.util.concurrent.atomic.AtomicInteger(0)
 
     def reload(): AnyRef = {
-      play.Play.synchronized {
-
+      println("Reload: called")
+      synchronized {
+        println("Reload: inside synchronized block")
         def classLoaderFromClasspath(classpath: Seq[File]): ClassLoader = {
           // Create a new classloader
           val version = classLoaderVersion.incrementAndGet
@@ -212,9 +212,10 @@ object PlayDevServer {
           buildResult match {
             case _: FailedBuild =>
               currentApplicationClasspath = None
-            case NewBuild(classpath) =>
-              currentApplicationClasspath = Some(classpath)
-            case _ =>
+            case fb: FreshBuild =>
+              currentApplicationClasspath = Some(fb.classpath)
+            case _: SameBuild =>
+              ()
           }
         }
 
@@ -222,26 +223,27 @@ object PlayDevServer {
           if (forceReloadNextTime) {
             forceReloadNextTime = false // DATA RACE
             buildResult match {
-              case FailedBuild(t) =>
-                t
+              case fb: FailedBuild =>
+                fb.throwable
               case _ =>
                 assert(currentApplicationClasspath.isDefined, "If not FailedBuild, then at least one build must have succeeded.")
                 classLoaderFromClasspath(currentApplicationClasspath.get)
             }
           } else {
             buildResult match {
-              case FailedBuild(t) =>
-                t
-              case NewBuild(classpath) =>
-                classLoaderFromClasspath(classpath)
-              case SameBuild =>
+              case fb: FailedBuild =>
+                fb.throwable
+              case fb: FreshBuild =>
+                classLoaderFromClasspath(fb.classpath)
+              case _: SameBuild =>
                 null
             }
           }
         }
 
 
-        val buildResult: BuildResult = sbtLink.build()
+        val buildResult: BuildResult = buildLink.build()
+        println(s"Reload: got build result $buildResult")
         cacheBuildResultClasspath(buildResult)
         reloadWithBuildResult(buildResult)
       }
@@ -252,7 +254,7 @@ object PlayDevServer {
     def getClassLoader = currentApplicationClassLoader
 
     def findSource(className: String, line: java.lang.Integer): Array[java.lang.Object] = {
-      sbtLink.findSource(className, line)
+      buildLink.findSource(className, line)
     }
 
     def close() = {

@@ -9,15 +9,14 @@ import play.runsupport.PlayWatchService
 import play.sbtplugin.run._
 import play.api._
 import play.core._
-// import play.core.buildlink._
-// import play.core.buildlink.application._
+import play.core.buildlink._
 import sbt._
 import sbt.Keys._
 import scala.concurrent.{ Future, Promise }
 import play.PlayImport._
 import PlayKeys._
 import PlayExceptions._
-import PlayDevServer.{ SbtLink, BuildResult, FailedBuild, SameBuild, NewBuild }
+// import PlayDevServer.{ SbtLink, BuildResult, FailedBuild, SameBuild, NewBuild }
 
 trait PlayReloader {
   this: PlayCommands with PlayPositionMapper =>
@@ -32,7 +31,7 @@ trait PlayReloader {
     playReload: TaskKey[sbt.inc.Analysis],
     classpathTask: TaskKey[Classpath],
     monitoredFiles: Seq[String],
-    playWatchService: PlayWatchService): SbtLink = new SbtLink {
+    playWatchService: PlayWatchService): BuildLink = new BuildLink {
 
     // Whether any source files have changed since the last request.
     @volatile private var changed = false
@@ -67,7 +66,7 @@ trait PlayReloader {
           }.getOrElse {
             UnexpectedException(Some("The compilation task failed without any exception!"))
           }
-          FailedBuild(t)
+          new FailedBuild { override val throwable = t }
         }
       }
 
@@ -95,13 +94,13 @@ trait PlayReloader {
       // Run the reload task, which will trigger everything to compile
       runPlayReloadTask().right.flatMap { _ =>
         // Calculate the classpath
-        runPlayClasspathTask().right.map { classpath =>
-          val triggered = classpathChanged(classpath)
+        runPlayClasspathTask().right.map { cp =>
+          val triggered = classpathChanged(cp)
           if (triggered || !isBuilt) {
             isBuilt = true
-            NewBuild(classpath.map(_.data))
+            new FreshBuild { override val classpath = cp.map(_.data).toArray }
           } else {
-            SameBuild
+            new SameBuild {}
           }
         }
       }.fold(
@@ -109,7 +108,7 @@ trait PlayReloader {
         identity[BuildResult]
       )
     } else {
-      SameBuild
+      new SameBuild {}
     }
 
     private def getProblems(incomplete: Incomplete): Seq[xsbti.Problem] = {
