@@ -208,7 +208,7 @@ package play.api.mvc {
       secure: java.lang.Boolean = this.cachedSecure): RequestHeader = {
 
       val original: RequestHeader = this
-      val (_id, _tags, _uri, _path, _method, _version, _queryString, _headers, _cachedRemoteAddress, _cachedSecure) = (id, tags, uri, path, method, version, queryString, headers, cachedRemoteAddress, cachedSecure)
+      val (_id, _tags, _uri, _path, _method, _version, _queryString, _headers, _cachedRemoteAddress, _cachedSecure) = (id, tags, uri, path, method, version, queryString, headers, cachedRemoteAddress, secure)
 
       new RequestHeader {
         val id = _id
