@@ -318,9 +318,9 @@ package play.api.mvc {
     // The following methods should never be called since cached values are non-null
     assume(cachedRemoteAddress != null && cachedSecure != null)
     private[play] def cachedRemoteAddress_=(remoteAddress: String): Unit = ???
-    private[play] def computeRemoteAddress: () => String = ???
+    private[play] def computeRemoteAddress: () => String = () => ???
     private[play] def cachedSecure_=(secure: java.lang.Boolean): Unit = ???
-    private[play] def computeSecure: () => Boolean = ???
+    private[play] def computeSecure: () => Boolean = () => ???
 
   }
 

@@ -51,7 +51,12 @@ class RequestHeaderSpec extends Specification {
     def method = ""
     def version = ""
     def queryString = Map()
-    def remoteAddress = ""
-    def secure = false
+    private[play] def cachedRemoteAddress = ""
+    private[play] def cachedSecure = false
+    // The following methods should never be called since `remoteAddress` is overridden in this class.
+    private[play] def cachedRemoteAddress_=(remoteAddress: String) = ???
+    private[play] def computeRemoteAddress: () => String = () => ???
+    private[play] def cachedSecure_=(secure: java.lang.Boolean) = () => ???
+    private[play] def computeSecure: () => Boolean = () => ???
   }
 }

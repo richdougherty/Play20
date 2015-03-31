@@ -21,8 +21,15 @@ object ServerResultUtilsSpec extends Specification with IterateeSpecification {
     def method = ""
     def version = ""
     def queryString = Map()
-    def remoteAddress = ""
-    def secure = false
+
+    private[play] def cachedRemoteAddress = ""
+    private[play] def cachedSecure = false
+    // The following methods should never be called since cachedValues are not null
+    private[play] def cachedRemoteAddress_=(remoteAddress: String) = ???
+    private[play] def computeRemoteAddress: () => String = () => ???
+    private[play] def cachedSecure_=(secure: java.lang.Boolean) = () => ???
+    private[play] def computeSecure: () => Boolean = () => ???
+
     val headers = new Headers(cookie.map { case (name, value) => "Cookie" -> s"$name=$value" }.toSeq)
   }
 
