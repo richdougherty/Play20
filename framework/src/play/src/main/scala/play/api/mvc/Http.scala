@@ -76,7 +76,22 @@ package play.api.mvc {
      *
      *
      */
-    def remoteAddress: String
+    def remoteAddress: String = { // could be final, except for FakeRequest
+      // This doesn't need to be thread-safe because:
+      // - it will almost always only be accessed by one thread at a time
+      // - even if it is accessed by more than one thread the computed
+      //   value should be the same.
+      // By ignoring thread-safety we optimize for the common single-threaded case.
+      if (cachedRemoteAddress == null) {
+        cachedRemoteAddress = computeRemoteAddress()
+        assert(cachedRemoteAddress != null)
+      }
+      cachedRemoteAddress
+    }
+
+    private[play] def cachedRemoteAddress: String
+    private[play] def cachedRemoteAddress_=(remoteAddress: String): Unit
+    private[play] def computeRemoteAddress: () => String
 
     /**
      * Is the client using SSL?
@@ -174,9 +189,12 @@ package play.api.mvc {
       version: String = this.version,
       queryString: Map[String, Seq[String]] = this.queryString,
       headers: Headers = this.headers,
-      remoteAddress: String = this.remoteAddress,
+      remoteAddress: String = this.cachedRemoteAddress,
       secure: Boolean = this.secure): RequestHeader = {
-      val (_id, _tags, _uri, _path, _method, _version, _queryString, _headers, _remoteAddress, _secure) = (id, tags, uri, path, method, version, queryString, headers, remoteAddress, secure)
+
+      val original: RequestHeader = this
+      val (_id, _tags, _uri, _path, _method, _version, _queryString, _headers, _cachedRemoteAddress, _secure) = (id, tags, uri, path, method, version, queryString, headers, cachedRemoteAddress, secure)
+
       new RequestHeader {
         val id = _id
         val tags = _tags
@@ -186,7 +204,8 @@ package play.api.mvc {
         val version = _version
         val queryString = _queryString
         val headers = _headers
-        val remoteAddress = _remoteAddress
+        private[play] var cachedRemoteAddress = _cachedRemoteAddress
+        override val computeRemoteAddress: () => String = original.computeRemoteAddress
         val secure = _secure
       }
     }
@@ -227,7 +246,8 @@ package play.api.mvc {
       val version: String,
       val queryString: Map[String, Seq[String]],
       val headers: Headers,
-      val remoteAddress: String,
+      var cachedRemoteAddress: String,
+      val computeRemoteAddress: () => String,
       val secure: Boolean) extends RequestHeader {
   }
 
@@ -257,7 +277,8 @@ package play.api.mvc {
       def version = self.version
       def queryString = self.queryString
       def headers = self.headers
-      def remoteAddress = self.remoteAddress
+      private[play] var cachedRemoteAddress = self.cachedRemoteAddress
+      private[play] val computeRemoteAddress = self.computeRemoteAddress
       def secure = self.secure
       lazy val body = f(self.body)
     }
@@ -274,8 +295,14 @@ package play.api.mvc {
       val version: String,
       val queryString: Map[String, Seq[String]],
       val headers: Headers,
-      val remoteAddress: String,
+      private[play] val cachedRemoteAddress: String,
       val secure: Boolean) extends Request[A] {
+
+    assume(cachedRemoteAddress != null)
+    // The following methods should never be called since remoteAddress is non-null
+    private[play] def cachedRemoteAddress_=(remoteAddress: String): Unit = ???
+    private[play] def computeRemoteAddress: () => String = ???
+
   }
 
   object Request {
@@ -289,7 +316,8 @@ package play.api.mvc {
       def version = rh.version
       def queryString = rh.queryString
       def headers = rh.headers
-      lazy val remoteAddress = rh.remoteAddress
+      private[play] var cachedRemoteAddress = rh.cachedRemoteAddress
+      private[play] val computeRemoteAddress = rh.computeRemoteAddress
       lazy val secure = rh.secure
       def username = None
       val body = a
@@ -309,7 +337,8 @@ package play.api.mvc {
     def uri = request.uri
     def method = request.method
     def version = request.version
-    def remoteAddress = request.remoteAddress
+    private[play] var cachedRemoteAddress = request.cachedRemoteAddress
+    private[play] val computeRemoteAddress = request.computeRemoteAddress
     def secure = request.secure
   }
 

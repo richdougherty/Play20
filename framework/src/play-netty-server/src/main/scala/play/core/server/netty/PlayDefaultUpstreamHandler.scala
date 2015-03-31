@@ -89,10 +89,6 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
         val nettyUri = new QueryStringDecoder(nettyHttpRequest.getUri)
         val rHeaders: Headers = getHeaders(nettyHttpRequest)
 
-        def rRemoteAddress = ServerRequestUtils.findRemoteAddress(
-          forwardedHeaderHandler,
-          rHeaders,
-          connectionRemoteAddress = e.getRemoteAddress.asInstanceOf[InetSocketAddress])
         def rSecure = ServerRequestUtils.findSecureProtocol(
           forwardedHeaderHandler,
           rHeaders,
@@ -117,7 +113,14 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
             def version = nettyVersion.getText
             def queryString = parameters
             def headers = rHeaders
-            lazy val remoteAddress = rRemoteAddress
+            private[play] var cachedRemoteAddress: String = null
+            private[play] def computeRemoteAddress: () => String = () => {
+              ServerRequestUtils.findRemoteAddress(
+                forwardedHeaderHandler,
+                rHeaders,
+                connectionRemoteAddress = e.getRemoteAddress.asInstanceOf[InetSocketAddress]
+              )
+            }
             lazy val secure = rSecure
             def username = None
           }

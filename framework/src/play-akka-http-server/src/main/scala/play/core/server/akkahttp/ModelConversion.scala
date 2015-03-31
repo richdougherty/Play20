@@ -66,11 +66,14 @@ private[akkahttp] class ModelConversion(forwardedHeaderHandler: ForwardedHeaderH
       def version = request.protocol.value
       def queryString = request.uri.query.toMultiMap
       val headers = convertRequestHeaders(request)
-      def remoteAddress: String = ServerRequestUtils.findRemoteAddress(
-        forwardedHeaderHandler,
-        headers,
-        remoteAddressArg
-      )
+      private[play] var cachedRemoteAddress: String = null
+      private[play] def computeRemoteAddress: () => String = { () =>
+        ServerRequestUtils.findRemoteAddress(
+          forwardedHeaderHandler,
+          headers,
+          remoteAddressArg
+        )
+      }
       def secure: Boolean = ServerRequestUtils.findSecureProtocol(
         forwardedHeaderHandler,
         headers,
