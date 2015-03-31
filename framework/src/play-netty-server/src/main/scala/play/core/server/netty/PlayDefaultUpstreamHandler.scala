@@ -89,12 +89,6 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
         val nettyUri = new QueryStringDecoder(nettyHttpRequest.getUri)
         val rHeaders: Headers = getHeaders(nettyHttpRequest)
 
-        def rSecure = ServerRequestUtils.findSecureProtocol(
-          forwardedHeaderHandler,
-          rHeaders,
-          connectionSecureProtocol = ctx.getPipeline.get(classOf[SslHandler]) != null
-        )
-
         def tryToCreateRequest = {
           val parameters = Map.empty[String, Seq[String]] ++ nettyUri.getParameters.asScala.mapValues(_.asScala)
           // wrapping into URI to handle absoluteURI
@@ -121,7 +115,14 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
                 connectionRemoteAddress = e.getRemoteAddress.asInstanceOf[InetSocketAddress]
               )
             }
-            lazy val secure = rSecure
+            private[play] var cachedSecure: java.lang.Boolean = null
+            private[play] def computeSecure: () => Boolean = () => {
+              ServerRequestUtils.findSecureProtocol(
+                forwardedHeaderHandler,
+                rHeaders,
+                connectionSecureProtocol = ctx.getPipeline.get(classOf[SslHandler]) != null
+              )
+            }
             def username = None
           }
           untaggedRequestHeader

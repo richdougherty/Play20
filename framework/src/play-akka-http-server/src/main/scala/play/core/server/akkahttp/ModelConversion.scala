@@ -74,11 +74,14 @@ private[akkahttp] class ModelConversion(forwardedHeaderHandler: ForwardedHeaderH
           remoteAddressArg
         )
       }
-      def secure: Boolean = ServerRequestUtils.findSecureProtocol(
-        forwardedHeaderHandler,
-        headers,
-        secureProtocol
-      )
+      private[play] var cachedSecure: java.lang.Boolean = null
+      private[play] def computeSecure: () => Boolean = () => {
+        ServerRequestUtils.findSecureProtocol(
+          forwardedHeaderHandler,
+          headers,
+          secureProtocol
+        )
+      }
       def username = ??? // FIXME: Stub
     }
   }

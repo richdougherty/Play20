@@ -34,12 +34,15 @@ case class FakeHeaders(data: Seq[(String, String)] = Seq.empty) extends Headers(
  * @param body The request body.
  * @param remoteAddress The client IP.
  */
-case class FakeRequest[A](method: String, uri: String, headers: Headers, body: A, override val remoteAddress: String = "127.0.0.1", version: String = "HTTP/1.1", id: Long = 666, tags: Map[String, String] = Map.empty[String, String], secure: Boolean = false) extends Request[A] {
+case class FakeRequest[A](method: String, uri: String, headers: Headers, body: A, override val remoteAddress: String = "127.0.0.1", version: String = "HTTP/1.1", id: Long = 666, tags: Map[String, String] = Map.empty[String, String], override val secure: Boolean = false) extends Request[A] {
 
-  private[play] def cachedRemoteAddress = remoteAddress
   // The following methods should never be called since `remoteAddress` is overridden in this class.
+  private[play] def cachedRemoteAddress = ???
   private[play] def cachedRemoteAddress_=(remoteAddress: String) = ???
   private[play] def computeRemoteAddress: () => String = ???
+  private[play] def cachedSecure = ???
+  private[play] def cachedSecure_=(secure: java.lang.Boolean) = ???
+  private[play] def computeSecure: () => Boolean = ???
 
   private def _copy[B](
     id: Long = this.id,
