@@ -216,6 +216,30 @@ class HelloModule extends Module {
 }
 //#eager-play-module
 }
+
+package customapplicationloader {
+
+import play.api.{Configuration, Environment}
+
+import implemented._
+
+//#custom-application-loader
+import play.api.ApplicationLoader
+import play.api.inject._
+import play.api.inject.guice._
+
+class CustomApplicationLoader extends GuiceApplicationLoader() {
+  override def builder(context: ApplicationLoader.Context): GuiceApplicationBuilder = {
+    val builder = new GuiceApplicationBuilder
+    builder
+      .in(context.environment)
+      .loadConfig(context.initialConfiguration)
+      .overrides(overrides(context): _*)
+  }
+}
+//#custom-application-loader
+}
+
 package injected.controllers {
   import play.api.mvc._
   class Application {
