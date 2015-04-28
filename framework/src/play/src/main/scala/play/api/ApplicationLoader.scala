@@ -49,9 +49,38 @@ object ApplicationLoader {
    * Locate and instantiate the ApplicationLoader.
    */
   def apply(context: Context): ApplicationLoader = {
-    context.initialConfiguration.getString("play.application.loader").fold[ApplicationLoader](new GuiceApplicationLoader) { loaderClass =>
-      Reflect.createInstance[ApplicationLoader](loaderClass, context.environment.classLoader)
-    }
+
+    /*
+  def configuredClass[ScalaTrait, JavaInterface, Default <: ScalaTrait](
+    environment: Environment, config: PlayConfig, key: String, defaultClassName: String)(implicit scalaTrait: SubClassOf[ScalaTrait],
+      javaInterface: SubClassOf[JavaInterface], default: ClassTag[Default]): Option[Either[Class[_ <: ScalaTrait], Class[_ <: JavaInterface]]] = {
+
+*/
+
+    Reflect.configuredClass[ApplicationLoader, play.ApplicationLoader, GuiceApplicationLoader](
+      context.environment, PlayConfig(context.initialConfiguration), "play.application.loader", classOf[GuiceApplicationLoader].getName
+    ) match {
+        case None =>
+          new GuiceApplicationLoader
+        case Some(Left(scalaClass)) =>
+          scalaClass.newInstance
+        case Some(Right(javaClass)) =>
+          val javaApplicationLoader: play.ApplicationLoader = javaClass.newInstance
+          // Create an adapter from a Java to a Scala ApplicationLoader. This class is
+          // effectively anonymous, but let's give it a name to make debugging easier.
+          class JavaApplicationLoaderAdapter extends ApplicationLoader {
+            override def load(context: ApplicationLoader.Context): Application = {
+              val javaContext = new play.ApplicationLoader.Context(context)
+              val javaApplication = javaApplicationLoader.load(javaContext)
+              javaApplication.getWrappedApplication
+            }
+          }
+          new JavaApplicationLoaderAdapter
+      }
+
+    // context.initialConfiguration.getString("play.application.loader").fold[ApplicationLoader](new GuiceApplicationLoader) { loaderClass =>
+    //   Reflect.createInstance[ApplicationLoader](loaderClass, context.environment.classLoader)
+    // }
   }
 
   /**

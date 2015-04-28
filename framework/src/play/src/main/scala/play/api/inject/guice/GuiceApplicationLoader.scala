@@ -27,9 +27,18 @@ class GuiceApplicationLoader(builder: GuiceApplicationBuilder) extends Applicati
   }
 
   def overrides(context: ApplicationLoader.Context): Seq[GuiceableModule] = {
+    GuiceApplicationLoader.defaultOverrides(context)
+  }
+
+}
+
+object GuiceApplicationLoader {
+  /**
+   * The default overrides provided by the Scala and Java GuiceApplicationLoaders.
+   */
+  def defaultOverrides(context: ApplicationLoader.Context): Seq[GuiceableModule] = {
     Seq(
       bind[OptionalSourceMapper] to new OptionalSourceMapper(context.sourceMapper),
       bind[WebCommands] to context.webCommands)
   }
-
 }
