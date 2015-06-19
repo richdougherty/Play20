@@ -28,3 +28,10 @@ InputKey[Unit]("verifyResourceContains") := {
   val assertions = args.tail.tail
   DevModeBuild.verifyResourceContains(path, status, assertions, 0)
 }
+
+PlayKeys.playReloadLeakHandler := Some(new Runnable {
+  def run = {
+    println("Memory leak handler")
+    IO.write(target.value / "leak-detected", "Leak detected")
+  }
+})

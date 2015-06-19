@@ -73,6 +73,11 @@ public interface BuildLink {
     public void forceReload();
 
     /**
+     * An operation to run if a reload leak is detected. If null, then no reload leak detection needs to be performed.
+     */
+    public Runnable reloadLeakHandler();
+
+    /**
      * Returns a list of application settings configured in the build system.
      *
      * @return The settings.

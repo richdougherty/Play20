@@ -110,6 +110,7 @@ object Reloader {
     docsClasspath: Classpath, docsJar: Option[File],
     defaultHttpPort: Int, defaultHttpAddress: String, projectPath: File,
     devSettings: Seq[(String, String)], args: Seq[String],
+    optReloadLeakHandler: Option[Runnable],
     runSbtTask: String => AnyRef, mainClassName: String): PlayDevServer = {
 
     val (properties, httpPort, httpsPort, httpAddress) = filterArgs(args, defaultHttpPort, defaultHttpAddress)
@@ -180,7 +181,10 @@ object Reloader {
     lazy val applicationLoader = dependencyClassLoader("PlayDependencyClassLoader", urls(dependencyClasspath), delegatingLoader)
     lazy val assetsLoader = assetsClassLoader(applicationLoader)
 
-    lazy val reloader = new Reloader(reloadCompile, reloaderClassLoader, assetsLoader, projectPath, devSettings, monitoredFiles, fileWatchService, runSbtTask)
+    lazy val reloader = new Reloader(
+      reloadCompile, reloaderClassLoader, assetsLoader, projectPath, devSettings, monitoredFiles,
+      fileWatchService, optReloadLeakHandler, runSbtTask
+    )
 
     try {
       // Now we're about to start, let's call the hooks:
@@ -258,6 +262,7 @@ class Reloader(
     devSettings: Seq[(String, String)],
     monitoredFiles: Seq[File],
     fileWatchService: FileWatchService,
+    optReloadLeakHandler: Option[Runnable],
     runSbtTask: String => AnyRef) extends BuildLink {
 
   // The current classloader for the application
@@ -355,6 +360,8 @@ class Reloader(
       }
     }.orNull
   }
+
+  override def reloadLeakHandler: Runnable = optReloadLeakHandler.orNull
 
   def runTask(task: String): AnyRef = runSbtTask(task)
 

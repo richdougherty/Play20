@@ -97,6 +97,7 @@ object ForkRun {
       projectPath = config.projectDirectory,
       devSettings = config.devSettings,
       args = args,
+      optReloadLeakHandler = None, // For the moment we only test leaks in non-forked mode
       runSbtTask = runSbtTask,
       mainClassName = config.mainClass
     )

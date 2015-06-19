@@ -11,7 +11,7 @@ import play.api.libs.concurrent.ActorSystemProvider
 import play.core._
 import play.utils.Threads
 import scala.collection.JavaConverters._
-import scala.concurrent.Await
+import scala.concurrent.{ Await, Future }
 import scala.concurrent.duration.Duration
 import scala.util.control.NonFatal
 import scala.util.{ Failure, Success, Try }
@@ -90,13 +90,39 @@ object DevServerStart {
         println(play.utils.Colors.magenta("--- (Running the application, auto-reloading is enabled) ---"))
         println()
 
-        // Create reloadable ApplicationProvider
-        val appProvider = new ApplicationProvider {
+        def detectLeaks(leakDetector: Option[LeakDetector]): Unit = {
+          for {
+            ld <- leakDetector
+            leakHandler <- Option(buildLink.reloadLeakHandler)
+          } {
+            println("Detecting leaks")
+            val leakDetected = ld.checkLeak()
+            println(s"Leak detected: $leakDetected")
+            if (leakDetected) { leakHandler.run() }
+          }
+        }
 
-          var lastState: Try[Application] = Failure(new PlayException("Not initialized", "?"))
+        trait ApplicationProviderWithLeakDetector extends ApplicationProvider {
+          def currentLeakDetector: Option[LeakDetector]
+        }
+
+        // Create reloadable ApplicationProvider
+        val appProvider = new ApplicationProviderWithLeakDetector {
+
+          case class State(app: Application, LeakDetector: LeakDetector)
+
+          var lastState: Try[State] = Failure(new PlayException("Not initialized", "?"))
           var currentWebCommands: Option[WebCommands] = None
 
-          override def current: Option[Application] = lastState.toOption
+          override def current: Option[Application] = lastState match {
+            case Success(State(app, _)) => Some(app)
+            case _ => None
+          }
+
+          override def currentLeakDetector: Option[LeakDetector] = lastState match {
+            case Success(State(_, ld)) => Some(ld)
+            case _ => None
+          }
 
           def get: Try[Application] = {
 
@@ -110,6 +136,8 @@ object DevServerStart {
               implicit val ec = play.core.Execution.internalContext
               Await.result(scala.concurrent.Future {
 
+                val newLeakDetector = new LeakDetector()
+
                 val reloaded = buildLink.reload match {
                   case NonFatal(t) => Failure(t)
                   case cl: ClassLoader => Success(Some(cl))
@@ -118,7 +146,7 @@ object DevServerStart {
 
                 reloaded.flatMap { maybeClassLoader =>
 
-                  val maybeApplication: Option[Try[Application]] = maybeClassLoader.map { projectClassloader =>
+                  val maybeNewState: Option[Try[State]] = maybeClassLoader.map { projectClassloader =>
                     try {
 
                       if (lastState.isSuccess) {
@@ -130,7 +158,9 @@ object DevServerStart {
                       val reloadable = this
 
                       // First, stop the old application if it exists
-                      lastState.foreach(Play.stop)
+                      lastState.foreach {
+                        case State(app, _) => Play.stop(app)
+                      }
 
                       // Create the new environment
                       val environment = Environment(path, projectClassloader, Mode.Dev)
@@ -155,7 +185,8 @@ object DevServerStart {
 
                       Play.start(newApplication)
 
-                      Success(newApplication)
+                      newLeakDetector.setTarget(projectClassloader)
+                      Success(State(newApplication, newLeakDetector))
                     } catch {
                       case e: PlayException => {
                         lastState = Failure(e)
@@ -172,11 +203,16 @@ object DevServerStart {
                     }
                   }
 
-                  maybeApplication.flatMap(_.toOption).foreach { app =>
-                    lastState = Success(app)
+                  val state: Try[State] = maybeNewState match {
+                    case Some(newState @ Success(State(newApp, _))) =>
+                      val oldLeakDetector: Option[LeakDetector] = currentLeakDetector
+                      lastState = newState
+                      detectLeaks(oldLeakDetector)
+                      newState
+                    case _ =>
+                      lastState
                   }
-
-                  maybeApplication.getOrElse(lastState)
+                  state.map(_.app)
                 }
 
               }, Duration.Inf)
@@ -203,7 +239,15 @@ object DevServerStart {
           configuration = Configuration.load(classLoader, System.getProperties, dirAndDevSettings, allowMissingApplicationConf = true)
         )
         val (actorSystem, actorSystemStopHook) = ActorSystemProvider.start(classLoader, serverConfig.configuration)
-        val serverContext = ServerProvider.Context(serverConfig, appProvider, actorSystem, actorSystemStopHook)
+        val serverStopHook: () => Future[Unit] = () => {
+          val actorStop = actorSystemStopHook()
+          import play.api.libs.iteratee.Execution.Implicits.trampoline
+          actorStop.map { _ =>
+            println("Maybe detecting leaks")
+            detectLeaks(appProvider.currentLeakDetector)
+          }
+        }
+        val serverContext = ServerProvider.Context(serverConfig, appProvider, actorSystem, serverStopHook)
         val serverProvider = ServerProvider.fromConfiguration(classLoader, serverConfig.configuration)
         serverProvider.createServer(serverContext)
       } catch {

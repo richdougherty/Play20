@@ -95,6 +95,7 @@ object PlayImport {
 
     /** A hook to configure how play blocks on user input while running. */
     val playInteractionMode = SettingKey[PlayInteractionMode]("playInteractionMode", "Hook to configure how Play blocks when running")
+    val playReloadLeakHandler = SettingKey[Option[Runnable]]("playReloadLeakHandler", "If set, this will run if memory leaks are detected when reloading. If not set, no memory leak detection will occur.")
 
     val externalizeResources = SettingKey[Boolean]("playExternalizeResources", "Whether resources should be externalized into the conf directory when Play is packaged as a distribution.")
     val playExternalizedResources = TaskKey[Seq[(File, String)]]("playExternalizedResources", "The resources to externalize")

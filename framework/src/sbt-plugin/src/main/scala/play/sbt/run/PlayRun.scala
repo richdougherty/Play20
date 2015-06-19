@@ -88,6 +88,7 @@ object PlayRun {
       baseDirectory.value,
       devSettings.value,
       args,
+      playReloadLeakHandler.value,
       runSbtTask,
       (mainClass in (Compile, Keys.run)).value.get
     )

@@ -122,6 +122,8 @@ object PlaySettings {
 
     playReload <<= PlayCommands.playReloadTask,
 
+    playReloadLeakHandler := None,
+
     ivyLoggingLevel := UpdateLogging.DownloadOnly,
 
     RoutesKeys.routesImport ++= Seq("controllers.Assets.Asset"),

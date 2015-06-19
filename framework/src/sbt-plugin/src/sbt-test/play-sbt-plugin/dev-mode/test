@@ -54,6 +54,7 @@ $ copy-file changes/some.css.0 public/css/some.css
 $ copy-file changes/some.txt.0 public/a/some.txt
 $ copy-file changes/some.txt.0 public/b/some.txt
 $ delete public/new
+-$ exists target/leak-detected
 > clean
 
 # JDK7 watcher
@@ -95,6 +96,7 @@ $ copy-file changes/some.css.0 public/css/some.css
 $ copy-file changes/some.txt.0 public/a/some.txt
 $ copy-file changes/some.txt.0 public/b/some.txt
 $ delete public/new
+-$ exists target/leak-detected
 > clean
 
 # JNotify watch service
@@ -136,6 +138,7 @@ $ copy-file changes/some.css.0 public/css/some.css
 $ copy-file changes/some.txt.0 public/a/some.txt
 $ copy-file changes/some.txt.0 public/b/some.txt
 $ delete public/new
+-$ exists target/leak-detected
 > clean
 
 # Reloader tests
@@ -160,6 +163,7 @@ $ copy-file changes/Application.scala.1 app/controllers/Application.scala
 $ sleep 1000
 > verifyResourceContains / 200 first
 > verifyReloads 2
+-$ exists target/leak-detected
 
 # Change a static asset
 $ copy-file changes/some.css.1 public/css/some.css
@@ -186,12 +190,15 @@ $ copy-file changes/Application.scala.3 app/controllers/Application.scala
 $ sleep 1000
 > verifyResourceContains / 200 second
 > verifyReloads 3
+-$ exists target/leak-detected
 
 # Change a resource (also introduces a startup failure)
 $ copy-file changes/application.conf.1 conf/application.conf
 $ sleep 1000
 > verifyResourceContains / 500
 > verifyReloads 4
+-$ exists target/leak-detected
 
 > playStop
+-$ exists target/leak-detected
 
