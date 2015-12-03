@@ -29,9 +29,9 @@ object ActorFlow {
   def actorRef[In, Out](props: ActorRef => Props, bufferSize: Int = 16, overflowStrategy: OverflowStrategy = OverflowStrategy.dropNew)(implicit factory: ActorRefFactory, mat: Materializer): Flow[In, Out, Unit] = {
 
     val (outActor, publisher) = Source.actorRef[Out](bufferSize, overflowStrategy)
-      .toMat(Sink.publisher)(Keep.both).run()
+      .toMat(Sink.publisher(fanout = false))(Keep.both).run()
 
-    Flow.wrap(
+    Flow.fromSinkAndSourceMat(
       Sink.actorRef(factory.actorOf(Props(new Actor {
         val flowActor = context.watch(context.actorOf(props(outActor), "flowActor"))
 

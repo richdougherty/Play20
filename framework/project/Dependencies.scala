@@ -149,7 +149,7 @@ object Dependencies {
   val nettyUtilsDependencies = slf4j
 
   val akkaHttp = Seq(
-    "com.typesafe.akka" %% "akka-http-core-experimental" % "1.0"
+    "com.typesafe.akka" %% "akka-http-core-experimental" % "2.0-M2"
   )
 
   val routesCompilerDependencies =  Seq(
@@ -246,7 +246,7 @@ object Dependencies {
 
   val streamsDependencies = Seq(
     "org.reactivestreams" % "reactive-streams" % "1.0.0",
-    "com.typesafe.akka" %% "akka-stream-experimental" % "1.0",
+    "com.typesafe.akka" %% "akka-stream-experimental" % "2.0-M2",
     scalaJava8Compat
   ) ++ specsBuild.map(_ % "test") ++ logback.map(_ % Test) ++ javaTestDeps
 

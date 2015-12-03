@@ -137,7 +137,7 @@ object Accumulator {
   def source[E]: Accumulator[E, Source[E, _]] = {
     // If Akka streams ever provides Sink.source(), we should use that instead.
     // https://github.com/akka/akka/issues/18406
-    Accumulator(Sink.publisher[E].mapMaterializedValue(publisher => Future.successful(Source(publisher))))
+    Accumulator(Sink.publisher[E](fanout = false).mapMaterializedValue(publisher => Future.successful(Source(publisher))))
   }
 
   /**
