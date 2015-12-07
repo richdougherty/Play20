@@ -2,6 +2,7 @@ package play.api.libs.streams
 
 import akka.stream.scaladsl.FlexiMerge.{ MergeLogic, ReadAny }
 import akka.stream.scaladsl._
+import akka.stream.stage.{ GraphStageLogic, GraphStage }
 import akka.stream.{ Attributes, UniformFanInShape }
 import play.api.libs.iteratee._
 
@@ -29,7 +30,7 @@ object AkkaStreams {
    * flow.
    */
   def bypassWith[In, FlowIn, Out](splitter: Flow[In, Either[FlowIn, Out], _],
-    mergeStrategy: FlexiMerge[Out, UniformFanInShape[Out, Out]] = OnlyFirstCanFinishMerge[Out](2)): Flow[FlowIn, Out, _] => Flow[In, Out, _] = { flow =>
+    mergeStrategy: GraphStage[UniformFanInShape[Out, Out], Out] = OnlyFirstCanFinishMerge[Out](2)): Flow[FlowIn, Out, _] => Flow[In, Out, _] = { flow =>
 
     splitter via Flow[Either[FlowIn, Out], Out]() { implicit builder =>
       import FlowGraph.Implicits._
@@ -74,7 +75,7 @@ object AkkaStreams {
    */
   case class OnlyFirstCanFinishMerge[T](inputPorts: Int) extends FlexiMerge[T, UniformFanInShape[T, T]](new UniformFanInShape[T, T](inputPorts), Attributes.name("EagerFinishMerge")) {
     def createMergeLogic(s: UniformFanInShape[T, T]): MergeLogic[T] =
-      new MergeLogic[T] {
+      new GraphStageLogic[T] {
         def initialState: State[T] = State[T](ReadAny(s.inSeq)) {
           case (ctx, port, in) =>
             ctx.emit(in)
