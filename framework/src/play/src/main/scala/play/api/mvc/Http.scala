@@ -23,6 +23,87 @@ package play.api.mvc {
 
   import GlobalStateHttpConfiguration._
 
+  trait RequestField[A] {
+    def name: String
+    def defaultInitializer: RequestField.Initializer[A]
+  }
+
+  object RequestField {
+
+    def lazyField[A](name: String)(evaluate: RequestHeader => A): RequestField[A] = {
+      val _name = name
+      new RequestField[A] {
+        override def name = _name
+        override val defaultInitializer: RequestField.Initializer[A] = new Initializer[A] {
+          override def initialize(rh: RequestHeader): A = evaluate(rh)
+        }
+      }
+    }
+
+    def defaultField[A](name: String)(defaultValue: A): RequestField[A] = {
+      val _name = name
+      new RequestField[A] {
+        override def name = _name
+        override val defaultInitializer: RequestField.Initializer[A] = new Initializer[A] {
+          override def initialize(rh: RequestHeader): A = defaultValue
+        }
+      }
+    }
+
+    trait Initializer[A] {
+      def initialize(rh: RequestHeader): A
+    }
+
+    final class State(map: Map[RequestField[_], Either[Initializer[_], _]]) {
+      def apply[A](field: RequestField[A], rh: RequestHeader): (State, A) = {
+        map(field) match {
+          case Left(initializer) =>
+            val value = initializer.asInstanceOf[Initializer[A]].initialize(rh)
+            (new State(map.updated(field, Right(value))), value)
+          case Right(value) =>
+            (this, value.asInstanceOf[A])
+        }
+      }
+      def setValue[A](field: RequestField[A], value: A): State = {
+        new State(map.updated(field, Right(value)))
+      }
+      def setInitializer[A](field: RequestField[A], initializer: Initializer[A]): State = {
+        new State(map.updated(field, Left(initializer)))
+      }
+    }
+
+    object State {
+      val empty = new State(Map.empty)
+    }
+
+  }
+
+  object StandardFields {
+    import RequestField._
+    // val Secure = new RequestField.DefaultValue[Boolean]("Secure", false)
+    val RequestId = {
+      val nextId = new java.util.concurrent.atomic.AtomicLong(0)
+      lazyField("RequestId") { _ => nextId.incrementAndGet() }
+    }
+
+    // val ParsedUri = new RequestField.Lazy[URI]("ParsedUri", rh => new URI(rh.uri))
+    // val Host: String = new RequestField.Lazy[String]("Host", { rh =>
+    //   val u = rh.field(ParsedUri)
+    //   (u.getHost, u.getPort) match {
+    //     case (h, p) if h != null && p > 0 => s"$h:$p"
+    //     case (h, _) if h != null => h
+    //     case _ => rh.headers.get(HeaderNames.HOST).getOrElse("")
+    //   }
+    // }
+    // val Domain: String = new RequestField.Lazy[String]("Domain", { rh =>
+    //   rh.field(Host).split(':').head
+    // }
+    val AcceptLanguages = lazyField("AcceptLanguages") { rh =>
+      val langs = RequestHeader.acceptHeader(rh.headers, HeaderNames.ACCEPT_LANGUAGE).map(item => (item._1, Lang.get(item._2)))
+      langs.sortWith((a, b) => a._1 > b._1).map(_._2).flatten
+    }
+  }
+
   /**
    * The HTTP request header. Note that it doesn’t contain the request body yet.
    */
@@ -33,6 +114,26 @@ package play.api.mvc {
      * The request ID.
      */
     def id: Long
+
+    def fieldState: RequestField.State
+
+    protected def fieldState_=(newState: RequestField.State): Unit
+
+    def withFieldState(newState: RequestField.State): RequestHeader
+
+    def field[A](field: RequestField[A]): A = {
+      val (newState, value) = fieldState(field, this)
+      fieldState = newState
+      value
+    }
+
+    def withField[A](field: RequestField[A], value: A): RequestHeader = {
+      withFieldState(fieldState.setValue(field, value))
+    }
+
+    def withLazyField[A](field: RequestField[A], initializer: RequestField.Initializer[A]): RequestHeader = {
+      withFieldState(fieldState.setInitializer(field, initializer))
+    }
 
     /**
      * The request Tags.
@@ -200,6 +301,9 @@ package play.api.mvc {
         override val headers = _headers
         override lazy val remoteAddress = _remoteAddress()
         override lazy val secure = _secure()
+        override def fieldState: RequestField.State = ???
+        override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
+        override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
       }
     }
 
@@ -241,6 +345,10 @@ package play.api.mvc {
       override val headers: Headers,
       override val remoteAddress: String,
       override val secure: Boolean) extends RequestHeader {
+
+    def fieldState: RequestField.State = ???
+    override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
+    override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
   }
 
   /**
@@ -272,6 +380,9 @@ package play.api.mvc {
       override def remoteAddress = self.remoteAddress
       override def secure = self.secure
       override lazy val body = f(self.body)
+      override def fieldState: RequestField.State = ???
+      override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
+      override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
     }
 
   }
@@ -289,6 +400,9 @@ package play.api.mvc {
       override val headers: Headers,
       override val remoteAddress: String,
       override val secure: Boolean) extends Request[A] {
+    override def fieldState: RequestField.State = ???
+    override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
+    override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
   }
 
   object Request {
@@ -305,6 +419,9 @@ package play.api.mvc {
       override lazy val remoteAddress = rh.remoteAddress
       override lazy val secure = rh.secure
       override val body = a
+      override def fieldState: RequestField.State = ???
+      override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
+      override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
     }
   }
 
@@ -323,6 +440,9 @@ package play.api.mvc {
     override def version = request.version
     override def remoteAddress = request.remoteAddress
     override def secure = request.secure
+    override def fieldState: RequestField.State = ???
+    override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
+    override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
   }
 
   /**
