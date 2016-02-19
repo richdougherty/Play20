@@ -25,18 +25,16 @@ package play.api.mvc {
 
   trait RequestField[A] {
     def name: String
-    def defaultInitializer: RequestField.Initializer[A]
+    def defaultInitializer(rh: RequestHeader): A
   }
 
   object RequestField {
 
-    def lazyField[A](name: String)(evaluate: RequestHeader => A): RequestField[A] = {
+    def lazyField[A](name: String)(evaluate: Initializer[A]): RequestField[A] = {
       val _name = name
       new RequestField[A] {
         override def name = _name
-        override val defaultInitializer: RequestField.Initializer[A] = new Initializer[A] {
-          override def initialize(rh: RequestHeader): A = evaluate(rh)
-        }
+        override def defaultInitializer(rh: RequestHeader): A = evaluate(rh)
       }
     }
 
@@ -44,23 +42,22 @@ package play.api.mvc {
       val _name = name
       new RequestField[A] {
         override def name = _name
-        override val defaultInitializer: RequestField.Initializer[A] = new Initializer[A] {
-          override def initialize(rh: RequestHeader): A = defaultValue
-        }
+        override def defaultInitializer(rh: RequestHeader): A = defaultValue
       }
     }
 
-    trait Initializer[A] {
-      def initialize(rh: RequestHeader): A
-    }
+    type Initializer[A] = RequestHeader => A
 
     final class State(map: Map[RequestField[_], Either[Initializer[_], _]]) {
       def apply[A](field: RequestField[A], rh: RequestHeader): (State, A) = {
-        map(field) match {
-          case Left(initializer) =>
-            val value = initializer.asInstanceOf[Initializer[A]].initialize(rh)
+        map.get(field) match {
+          case None =>
+            val value = field.defaultInitializer(rh)
             (new State(map.updated(field, Right(value))), value)
-          case Right(value) =>
+          case Some(Left(initializer)) =>
+            val value = initializer.asInstanceOf[Initializer[A]].apply(rh)
+            (new State(map.updated(field, Right(value))), value)
+          case Some(Right(value)) =>
             (this, value.asInstanceOf[A])
         }
       }
@@ -86,7 +83,14 @@ package play.api.mvc {
       lazyField("RequestId") { _ => nextId.incrementAndGet() }
     }
 
-    // val ParsedUri = new RequestField.Lazy[URI]("ParsedUri", rh => new URI(rh.uri))
+    val ParsedUri = lazyField[URI]("ParsedUri") { rh => new URI(rh.uri) }
+
+    val Tags = defaultField[Map[String,String]]("Tags")(Map.empty)
+
+    val RemoteAddress = defaultField[String]("RemoteAddress")("")
+
+    val Secure = defaultField[Boolean]("Secure")(false)
+
     // val Host: String = new RequestField.Lazy[String]("Host", { rh =>
     //   val u = rh.field(ParsedUri)
     //   (u.getHost, u.getPort) match {
@@ -104,41 +108,88 @@ package play.api.mvc {
     }
   }
 
-  /**
-   * The HTTP request header. Note that it doesn’t contain the request body yet.
-   */
-  @implicitNotFound("Cannot find any HTTP Request Header here")
-  trait RequestHeader {
+  final class DefaultRequestHeader(
+      val method: String,
+      val uri: String,
+      val path: String,
+      val queryString: Map[String, Seq[String]],
+      val version: String,
+      val headers: Headers,
+      private var fieldState: RequestField.State) extends RequestHeader {
 
-    /**
-     * The request ID.
-     */
-    def id: Long
-
-    def fieldState: RequestField.State
-
-    protected def fieldState_=(newState: RequestField.State): Unit
-
-    def withFieldState(newState: RequestField.State): RequestHeader
-
-    def field[A](field: RequestField[A]): A = {
+    override def get[A](field: RequestField[A]): A = {
       val (newState, value) = fieldState(field, this)
       fieldState = newState
       value
     }
 
-    def withField[A](field: RequestField[A], value: A): RequestHeader = {
+    private def withFieldState(newFieldState: RequestField.State): RequestHeader = {
+      new DefaultRequestHeader(
+        method = method,
+        uri = uri,
+        path = path,
+        queryString = queryString,
+        version = version,
+        headers = headers,
+        fieldState = newFieldState)      
+    }
+
+    override def withFieldValue[A](field: RequestField[A], value: A): RequestHeader = {
       withFieldState(fieldState.setValue(field, value))
     }
 
-    def withLazyField[A](field: RequestField[A], initializer: RequestField.Initializer[A]): RequestHeader = {
+    override def withFieldInitializer[A](field: RequestField[A], initializer: RequestField.Initializer[A]): RequestHeader = {
       withFieldState(fieldState.setInitializer(field, initializer))
     }
+
+    def withMethod(newMethod: String): RequestHeader = {
+      new DefaultRequestHeader(
+        method = newMethod,
+        uri = uri,
+        path = path,
+        queryString = queryString,
+        version = version,
+        headers = headers,
+        fieldState = fieldState)
+    }
+
+    def withPath(newPath: String): RequestHeader = {
+      new DefaultRequestHeader(
+        method = method,
+        uri = uri,
+        path = newPath,
+        queryString = queryString,
+        version = version,
+        headers = headers,
+        fieldState = fieldState)      
+    }
+
+  }
+
+  /**
+   * The HTTP request header. Note that it doesn’t contain the request body yet.
+   */
+  @implicitNotFound("Cannot find any HTTP Request Header here")
+  trait RequestHeader {
+    parent =>
+
+    /**
+     * The request ID.
+     */
+    final def id: Long = get(StandardFields.RequestId)
+
+    // protected var fieldState: RequestField.State
+
+    def get[A](field: RequestField[A]): A
+
+    def withFieldValue[A](field: RequestField[A], value: A): RequestHeader
+
+    def withFieldInitializer[A](field: RequestField[A], initializer: RequestField.Initializer[A]): RequestHeader
 
     /**
      * The request Tags.
      */
-    def tags: Map[String, String]
+    final def tags: Map[String, String] = get(StandardFields.Tags)
 
     /**
      * The complete request URI, containing both path and query string.
@@ -173,6 +224,9 @@ package play.api.mvc {
      */
     def headers: Headers
 
+    def withMethod(newMethod: String): RequestHeader
+    def withPath(newPath: String): RequestHeader
+
     /**
      * The client IP address.
      *
@@ -181,12 +235,12 @@ package play.api.mvc {
      *
      *
      */
-    def remoteAddress: String
+    final def remoteAddress: String = get(StandardFields.RemoteAddress)
 
     /**
      * Is the client using SSL?
      */
-    def secure: Boolean
+    final def secure: Boolean = get(StandardFields.Secure)
 
     // -- Computed
 
@@ -215,10 +269,7 @@ package play.api.mvc {
     /**
      * The Request Langs extracted from the Accept-Language header and sorted by preference (preferred first).
      */
-    lazy val acceptLanguages: Seq[play.api.i18n.Lang] = {
-      val langs = RequestHeader.acceptHeader(headers, HeaderNames.ACCEPT_LANGUAGE).map(item => (item._1, Lang.get(item._2)))
-      langs.sortWith((a, b) => a._1 > b._1).map(_._2).flatten
-    }
+    def acceptLanguages: Seq[play.api.i18n.Lang] = get(StandardFields.AcceptLanguages)
 
     /**
      * @return The media types list of the request’s Accept header, sorted by preference (preferred first).
@@ -275,37 +326,45 @@ package play.api.mvc {
       charset <- param._2
     } yield charset
 
-    /**
-     * Copy the request.
-     */
-    def copy(
-      id: Long = this.id,
-      tags: Map[String, String] = this.tags,
-      uri: String = this.uri,
-      path: String = this.path,
-      method: String = this.method,
-      version: String = this.version,
-      queryString: Map[String, Seq[String]] = this.queryString,
-      headers: Headers = this.headers,
-      remoteAddress: => String = this.remoteAddress,
-      secure: => Boolean = this.secure): RequestHeader = {
-      val (_id, _tags, _uri, _path, _method, _version, _queryString, _headers, _remoteAddress, _secure) = (id, tags, uri, path, method, version, queryString, headers, () => remoteAddress, () => secure)
-      new RequestHeader {
-        override val id = _id
-        override val tags = _tags
-        override val uri = _uri
-        override val path = _path
-        override val method = _method
-        override val version = _version
-        override val queryString = _queryString
-        override val headers = _headers
-        override lazy val remoteAddress = _remoteAddress()
-        override lazy val secure = _secure()
-        override def fieldState: RequestField.State = ???
-        override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
-        override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
-      }
-    }
+    // def copyHeader(
+    //   method: String,
+    //   uri: String,
+    //   path: String,
+    //   queryString: Map[String, Seq[String]],
+    //   version: String,
+    //   headers: Headers)
+
+
+    // /**
+    //  * Copy the request.
+    //  */
+    // def copy(
+    //   id: => Long = this.id,
+    //   tags: Map[String, String] = this.tags,
+    //   uri: String = this.uri,
+    //   path: String = this.path,
+    //   method: String = this.method,
+    //   version: String = this.version,
+    //   queryString: Map[String, Seq[String]] = this.queryString,
+    //   headers: Headers = this.headers,
+    //   remoteAddress: => String = this.remoteAddress,
+    //   secure: => Boolean = this.secure,
+    //   fieldState: RequestField.State = this.fieldState): RequestHeader = {
+    //   val (_id, _tags, _uri, _path, _method, _version, _queryString, _headers, _remoteAddress, _secure, _fieldState) = (id, tags, uri, path, method, version, queryString, headers, () => remoteAddress, () => secure, fieldState)
+    //   new RequestHeader {
+    //     override val id = _id
+    //     override val tags = _tags
+    //     override val uri = _uri
+    //     override val path = _path
+    //     override val method = _method
+    //     override val version = _version
+    //     override val queryString = _queryString
+    //     override val headers = _headers
+    //     override lazy val remoteAddress = _remoteAddress()
+    //     override lazy val secure = _secure()
+    //     override protected var fieldState = _fieldState
+    //   }
+    // }
 
     override def toString = {
       method + " " + uri
@@ -334,23 +393,6 @@ package play.api.mvc {
     }
   }
 
-  private[play] class RequestHeaderImpl(
-      override val id: Long,
-      override val tags: Map[String, String],
-      override val uri: String,
-      override val path: String,
-      override val method: String,
-      override val version: String,
-      override val queryString: Map[String, Seq[String]],
-      override val headers: Headers,
-      override val remoteAddress: String,
-      override val secure: Boolean) extends RequestHeader {
-
-    def fieldState: RequestField.State = ???
-    override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
-    override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
-  }
-
   /**
    * The complete HTTP request.
    *
@@ -360,90 +402,61 @@ package play.api.mvc {
   trait Request[+A] extends RequestHeader {
     self =>
 
+    def requestHeader: RequestHeader
+
     /**
      * The body content.
      */
     def body: A
 
+    override def get[A](field: RequestField[A]): A = requestHeader.get(field)
+    override def withFieldValue[B](field: RequestField[B], value: B): Request[A] = {
+      new DefaultRequest(requestHeader.withFieldValue(field, value), body)
+    }
+    override def withFieldInitializer[B](field: RequestField[B], initializer: RequestField.Initializer[B]): Request[A] = {
+      new DefaultRequest(requestHeader.withFieldInitializer(field, initializer), body)
+    }
+
+    override def withMethod(newMethod: String): Request[A]
+    override def withPath(newPath: String): Request[A]
+
+    override def uri = requestHeader.uri
+    override def path = requestHeader.path
+    override def method = requestHeader.method
+    override def version = requestHeader.version
+    override def queryString = requestHeader.queryString
+    override def headers = requestHeader.headers
+
     /**
      * Transform the request body.
      */
-    def map[B](f: A => B): Request[B] = new Request[B] {
-      override def id = self.id
-      override def tags = self.tags
-      override def uri = self.uri
-      override def path = self.path
-      override def method = self.method
-      override def version = self.version
-      override def queryString = self.queryString
-      override def headers = self.headers
-      override def remoteAddress = self.remoteAddress
-      override def secure = self.secure
-      override lazy val body = f(self.body)
-      override def fieldState: RequestField.State = ???
-      override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
-      override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
-    }
+    def map[B](f: A => B): Request[B] = new DefaultRequest[B](requestHeader, f(body))
 
   }
 
-  /** Used by Java wrapper */
-  private[play] class RequestImpl[A](
-      override val body: A,
-      override val id: Long,
-      override val tags: Map[String, String],
-      override val uri: String,
-      override val path: String,
-      override val method: String,
-      override val version: String,
-      override val queryString: Map[String, Seq[String]],
-      override val headers: Headers,
-      override val remoteAddress: String,
-      override val secure: Boolean) extends Request[A] {
-    override def fieldState: RequestField.State = ???
-    override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
-    override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
+  class DefaultRequest[+A](
+    override val requestHeader: RequestHeader,
+    override val body: A
+  ) extends Request[A] {
+
+    override def withMethod(newMethod: String): Request[A] = {
+      new DefaultRequest(requestHeader.withMethod(newMethod), body)
+    }
+    override def withPath(newPath: String): Request[A] = {
+      new DefaultRequest(requestHeader.withPath(newPath), body)
+    }
+
   }
 
   object Request {
-
-    def apply[A](rh: RequestHeader, a: A) = new Request[A] {
-      override def id = rh.id
-      override def tags = rh.tags
-      override def uri = rh.uri
-      override def path = rh.path
-      override def method = rh.method
-      override def version = rh.version
-      override def queryString = rh.queryString
-      override def headers = rh.headers
-      override lazy val remoteAddress = rh.remoteAddress
-      override lazy val secure = rh.secure
-      override val body = a
-      override def fieldState: RequestField.State = ???
-      override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
-      override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
-    }
+    def apply[A](rh: RequestHeader, body: A) = new DefaultRequest[A](rh, body)
   }
 
   /**
    * Wrap an existing request. Useful to extend a request.
    */
-  class WrappedRequest[+A](request: Request[A]) extends Request[A] {
-    override def id = request.id
-    override def tags = request.tags
-    override def body = request.body
-    override def headers = request.headers
-    override def queryString = request.queryString
-    override def path = request.path
-    override def uri = request.uri
-    override def method = request.method
-    override def version = request.version
-    override def remoteAddress = request.remoteAddress
-    override def secure = request.secure
-    override def fieldState: RequestField.State = ???
-    override protected def fieldState_=(newState: play.api.mvc.RequestField.State): Unit = ???
-    override def withFieldState(newState: play.api.mvc.RequestField.State): RequestHeader = ???
-  }
+  @deprecated("2.5.0", "Use DefaultRequest instead.")
+  class WrappedRequest[+A](original: Request[A]) extends DefaultRequest[A](original.requestHeader, original.body)
 
   /**
    * Defines a `Call`, which describes an HTTP request and can be used to create links or fill redirect data.
