@@ -9,6 +9,7 @@ import org.w3c.dom.Document;
 import org.xml.sax.InputSource;
 import play.api.libs.json.JsValue;
 import play.api.mvc.Headers;
+import play.api.mvc.RequestField;
 import play.core.j.JavaParsers;
 import play.core.system.RequestIdProvider;
 import play.i18n.Lang;
@@ -36,6 +37,12 @@ import static play.libs.Scala.asScala;
  * Defines HTTP standard objects.
  */
 public class Http {
+
+    public static class StandardFields {
+        public static RequestField REQUEST_ID = play.api.mvc.StandardFields$.MODULE$.RequestId();
+        public static RequestField SECURE = play.api.mvc.StandardFields$.MODULE$.Secure();
+        public static RequestField REMOTE_ADDRESS = play.api.mvc.StandardFields$.MODULE$.RemoteAddress();
+    }
 
     /**
      * The global HTTP context.
@@ -894,24 +901,43 @@ public class Http {
          * @return a build of the given parameters
          */
         public RequestImpl build() {
-            return new RequestImpl(new play.api.mvc.RequestImpl(
-                body(),
-                id,
-                asScala(tags()),
-                uri.toString(),
-                uri.getRawPath(),
-                method,
-                version,
-                mapListToScala(splitQuery()),
-                buildHeaders(),
-                remoteAddress,
-                secure));
+            return new RequestImpl(
+                new play.api.mvc.DefaultRequest(
+                    new play.api.mvc.DefaultRequestHeader(
+                        method, uri.toString(), uri.getRawPath(), mapListToScala(splitQuery()), version,
+                        buildHeaders(), fieldState
+                    ),
+                    body
+                )
+            );
+      // val method: String,
+      // val uri: String,
+      // val path: String,
+      // val queryString: Map[String, Seq[String]],
+      // val version: String,
+      // val headers: Headers,
+      // private var fieldState: RequestField.State) extends RequestHeader {
+
+      //           ),
+      //           body()
+
+      //           new play.api.mvc.DefaultRequest(
+      //           id,
+      //           asScala(tags()),
+      //           uri.toString(),
+      //           uri.getRawPath(),
+      //           method,
+      //           version,
+      //           mapListToScala(splitQuery()),
+      //           buildHeaders(),
+      //           remoteAddress,
+      //           secure));
         }
 
         // -------------------
         // REQUEST HEADER CODE
 
-        protected Long id = RequestIdProvider.requestIDs().incrementAndGet();
+        protected Long id;
         protected Map<String, String> tags = new HashMap<>();
         protected String method;
         protected boolean secure;
@@ -919,6 +945,7 @@ public class Http {
         protected String version;
         protected Map<String, String[]> headers = new HashMap<>();
         protected String remoteAddress;
+        protected RequestField.State fieldState = RequestField.State$.MODULE$.empty();
 
         /**
          * @return the id of the request
@@ -933,6 +960,7 @@ public class Http {
          */
         public RequestBuilder id(Long id) {
             this.id = id;
+            fieldState = fieldState.setValue(StandardFields.REQUEST_ID, id);
             return this;
         }
 
@@ -1244,6 +1272,7 @@ public class Http {
          * @return the remote address
          */
         public String remoteAddress() {
+            this.remoteAddress = remoteAddress;
             return remoteAddress;
         }
 
@@ -1252,6 +1281,7 @@ public class Http {
          * @return the builder instance
          */
         public RequestBuilder remoteAddress(String remoteAddress) {
+            this.fieldState = fieldState.setValue(StandardFields.REMOTE_ADDRESS, remoteAddress);
             this.remoteAddress = remoteAddress;
             return this;
         }

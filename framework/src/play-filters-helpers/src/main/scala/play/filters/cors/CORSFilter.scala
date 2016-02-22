@@ -57,6 +57,7 @@ class CORSFilter(
 object CORSFilter {
 
   val RequestTag = "CORS_REQUEST"
+  val Origin = RequestField.defaultField[Option[String]]("Origin")(None)
 
   def apply(corsConfig: CORSConfig = CORSConfig(), errorHandler: HttpErrorHandler = DefaultHttpErrorHandler,
     pathPrefixes: Seq[String] = Seq("/"))(implicit mat: Materializer) =

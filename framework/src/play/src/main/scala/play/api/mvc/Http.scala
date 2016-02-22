@@ -85,7 +85,7 @@ package play.api.mvc {
 
     val ParsedUri = lazyField[URI]("ParsedUri") { rh => new URI(rh.uri) }
 
-    val Tags = defaultField[Map[String,String]]("Tags")(Map.empty)
+    private[play] val Tags = defaultField[Map[String,String]]("Tags")(Map.empty)
 
     val RemoteAddress = defaultField[String]("RemoteAddress")("")
 
@@ -189,6 +189,7 @@ package play.api.mvc {
     /**
      * The request Tags.
      */
+    @deprecated("Use RequestFields instead of tags", "???") // TODO: Set the version
     final def tags: Map[String, String] = get(StandardFields.Tags)
 
     /**

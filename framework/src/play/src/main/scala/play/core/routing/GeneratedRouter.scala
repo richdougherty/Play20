@@ -78,6 +78,10 @@ case class RouteParams(path: Map[String, Either[Throwable, String]], queryString
  */
 case class HandlerDef(classLoader: ClassLoader, routerPackage: String, controller: String, method: String, parameterTypes: Seq[Class[_]], verb: String, comments: String, path: String)
 
+object HandlerDef {
+  val Field = RequestField.defaultField[Option[HandlerDef]]("HandlerDef")(None)
+}
+
 /**
  * A generated router.
  */

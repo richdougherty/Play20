@@ -34,7 +34,7 @@ trait HandlerInvoker[-T] {
  */
 private class TaggingInvoker[-A](underlyingInvoker: HandlerInvoker[A], handlerDef: HandlerDef) extends HandlerInvoker[A] {
   import HandlerInvokerFactory._
-  val cachedHandlerTags = handlerTags(handlerDef)
+  // val cachedHandlerTags = handlerTags(handlerDef)
   def call(call: => A): Handler = {
     val handler = underlyingInvoker.call(call)
     // All JavaAction's should already be tagged
@@ -42,10 +42,10 @@ private class TaggingInvoker[-A](underlyingInvoker: HandlerInvoker[A], handlerDe
       case alreadyTagged: RequestTaggingHandler => alreadyTagged
       case action: EssentialAction => new EssentialAction with RequestTaggingHandler {
         def apply(rh: RequestHeader) = action(rh)
-        def tagRequest(rh: RequestHeader) = taggedRequest(rh, cachedHandlerTags)
+        def tagRequest(rh: RequestHeader) = rh.withFieldValue(HandlerDef.Field, Some(handlerDef))
       }
       case ws: WebSocket =>
-        WebSocket(rh => ws(taggedRequest(rh, cachedHandlerTags)))
+        WebSocket(rh => ws(rh.withFieldValue(HandlerDef.Field, Some(handlerDef))))
       case other => other
     }
   }
@@ -73,18 +73,18 @@ object HandlerInvokerFactory {
   import play.core.j.JavaWebSocket
   import com.fasterxml.jackson.databind.JsonNode
 
-  private[routing] def handlerTags(handlerDef: HandlerDef): Map[String, String] = Map(
-    play.api.routing.Router.Tags.RoutePattern -> handlerDef.path,
-    play.api.routing.Router.Tags.RouteVerb -> handlerDef.verb,
-    play.api.routing.Router.Tags.RouteController -> handlerDef.controller,
-    play.api.routing.Router.Tags.RouteActionMethod -> handlerDef.method,
-    play.api.routing.Router.Tags.RouteComments -> handlerDef.comments
-  )
+  // private[routing] def handlerTags(handlerDef: HandlerDef): Map[String, String] = Map(
+  //   play.api.routing.Router.Tags.RoutePattern -> handlerDef.path,
+  //   play.api.routing.Router.Tags.RouteVerb -> handlerDef.verb,
+  //   play.api.routing.Router.Tags.RouteController -> handlerDef.controller,
+  //   play.api.routing.Router.Tags.RouteActionMethod -> handlerDef.method,
+  //   play.api.routing.Router.Tags.RouteComments -> handlerDef.comments
+  // )
 
-  private[routing] def taggedRequest(rh: RequestHeader, tags: Map[String, String]): RequestHeader = {
-    val newTags = if (rh.tags.isEmpty) tags else rh.tags ++ tags
-    rh.copy(tags = newTags)
-  }
+  // private[routing] def taggedRequest(rh: RequestHeader, tags: Map[String, String]): RequestHeader = {
+  //   val newTags = if (rh.tags.isEmpty) tags else rh.tags ++ tags
+  //   rh.copy(tags = newTags)
+  // }
 
   /**
    * Create a `HandlerInvokerFactory` for a call that already produces a
@@ -120,7 +120,7 @@ object HandlerInvokerFactory {
    */
   private abstract class JavaActionInvokerFactory[A] extends HandlerInvokerFactory[A] {
     def createInvoker(fakeCall: => A, handlerDef: HandlerDef): HandlerInvoker[A] = new HandlerInvoker[A] {
-      val cachedHandlerTags = handlerTags(handlerDef)
+      // val cachedHandlerTags = handlerTags(handlerDef)
       val cachedAnnotations = {
         val controller = loadJavaControllerClass(handlerDef)
         val method = MethodUtils.getMatchingAccessibleMethod(controller, handlerDef.method, handlerDef.parameterTypes: _*)
@@ -134,7 +134,7 @@ object HandlerInvokerFactory {
             javaBodyParserToScala(javaParser)
           }
           def invocation: CompletionStage[JResult] = resultCall(call)
-          def tagRequest(rh: RequestHeader) = taggedRequest(rh, cachedHandlerTags)
+          def tagRequest(rh: RequestHeader) = rh.withFieldValue(HandlerDef.Field, Some(handlerDef))
         }
       }
     }
@@ -166,7 +166,7 @@ object HandlerInvokerFactory {
   private abstract class JavaWebSocketInvokerFactory[A, B] extends HandlerInvokerFactory[A] {
     def webSocketCall(call: => A): WebSocket
     def createInvoker(fakeCall: => A, handlerDef: HandlerDef): HandlerInvoker[A] = new HandlerInvoker[A] {
-      val cachedHandlerTags = handlerTags(handlerDef)
+      // val cachedHandlerTags = handlerTags(handlerDef)
       def call(call: => A): WebSocket = webSocketCall(call)
     }
   }
