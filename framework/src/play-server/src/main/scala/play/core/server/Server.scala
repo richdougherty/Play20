@@ -10,6 +10,7 @@ import play.api.routing.Router
 import scala.language.postfixOps
 
 import play.api._
+import play.api.http.Status
 import play.api.mvc._
 import play.core.{ DefaultWebCommands, ApplicationProvider }
 
@@ -42,7 +43,7 @@ trait Server extends ServerWithStop {
 
     // Common code for handling an exception and returning an error result
     def logExceptionAndGetResult(e: Throwable): Left[Future[Result], Nothing] = {
-      Left(DefaultHttpErrorHandler.onServerError(request, e))
+      Left(DefaultHttpErrorHandler.onServerError(request, Status.INTERNAL_SERVER_ERROR, e))
     }
 
     try {
