@@ -474,7 +474,7 @@ class AssetsBuilder(errorHandler: HttpErrorHandler) extends Controller {
         errorHandler.onClientError(request, BAD_REQUEST, s"Invalid URI encoding for $file at $path: " + e.getMessage)
       case NonFatal(e) =>
         // Add a bit more information to the exception for better error reporting later
-        errorHandler.onServerError(request, INTERNAL_SERVER_ERROR, new RuntimeException(s"Unexpected error while serving $file at $path: " + e.getMessage, e))
+        errorHandler.onServerError(request, new RuntimeException(s"Unexpected error while serving $file at $path: " + e.getMessage, e))
     }
   }
 

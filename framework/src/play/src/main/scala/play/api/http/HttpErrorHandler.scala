@@ -21,10 +21,7 @@ import scala.concurrent._
 import scala.util.control.NonFatal
 
 /**
- * Component for handling HTTP errors in Play. An instance of this class is
- * called by Play when an error occurs. The handler generates a [[Result]]
- * to send. For example, an error page may be displayed. The handler may
- * optionally perform other tasks, such as logging a record of the error.
+ * Component for handling HTTP errors in Play.
  *
  * @since 2.4.0
  */
@@ -43,22 +40,9 @@ trait HttpErrorHandler {
    * Invoked when a server error occurs.
    *
    * @param request The request that triggered the server error.
-   * @param statusCode The error status code.  Must be greater or equal to 500, and less than 600.
    * @param exception The server error.
    */
-  def onServerError(request: RequestHeader, statusCode: Int, exception: Throwable): Future[Result]
-
-  /**
-   * This method is no longer invoked by Play; override the version with the
-   * statusCode parameter instead.
-   *
-   * @param request The request that triggered the server error.
-   * @param exception The server error.
-   */
-  @deprecated("Use the version of this method with the statusCode parameter", "2.6.0")
-  def onServerError(request: RequestHeader, exception: Throwable): Future[Result] = {
-    onServerError(request, INTERNAL_SERVER_ERROR, exception)
-  }
+  def onServerError(request: RequestHeader, exception: Throwable): Future[Result]
 }
 
 object HttpErrorHandler {
@@ -81,7 +65,7 @@ object HttpErrorHandler {
  * @param router An optional router.
  *               If provided, in dev mode, will be used to display more debug information when a handler can't be found.
  *               This is a lazy parameter, to avoid circular dependency issues, since the router may well depend on
- *               the error handler.
+ *               this.
  */
 @Singleton
 class DefaultHttpErrorHandler(environment: Environment, configuration: Configuration,
@@ -173,28 +157,23 @@ class DefaultHttpErrorHandler(environment: Environment, configuration: Configura
    * mode, that you override [[onProdServerError]] instead of this method.
    *
    * @param request The request that triggered the server error.
-   * @param statusCode The error status code.  Must be greater or equal to 500, and less than 600.
    * @param exception The server error.
    */
-  def onServerError(request: RequestHeader, statusCode: Int, exception: Throwable): Future[Result] = {
+  def onServerError(request: RequestHeader, exception: Throwable): Future[Result] = {
     try {
-      if (statusCode < 500 || statusCode >= 600) {
-        throw new IllegalArgumentException(s"onServerError invoked with non server error status code $statusCode: $exception")
-      }
-
       val usefulException = HttpErrorHandlerExceptions.throwableToUsefulException(sourceMapper,
         environment.mode == Mode.Prod, exception)
 
-      logServerError(request, statusCode, usefulException)
+      logServerError(request, usefulException)
 
       environment.mode match {
-        case Mode.Prod => onProdServerError(request, statusCode, usefulException)
-        case _ => onDevServerError(request, statusCode, usefulException)
+        case Mode.Prod => onProdServerError(request, usefulException)
+        case _ => onDevServerError(request, usefulException)
       }
     } catch {
       case NonFatal(e) =>
         Logger.error("Error while handling error", e)
-        Future.successful(Results.InternalServerError)
+        Future.successful(InternalServerError)
     }
   }
 
@@ -206,11 +185,11 @@ class DefaultHttpErrorHandler(environment: Environment, configuration: Configura
    * @param request The request that triggered the server error.
    * @param usefulException The server error.
    */
-  protected def logServerError(request: RequestHeader, statusCode: Int, usefulException: UsefulException) {
+  protected def logServerError(request: RequestHeader, usefulException: UsefulException) {
     Logger.error("""
                     |
-                    |! @%s - Internal server error (%s), for (%s) [%s] ->
-                    | """.stripMargin.format(usefulException.id, statusCode, request.method, request.uri),
+                    |! @%s - Internal server error, for (%s) [%s] ->
+                    | """.stripMargin.format(usefulException.id, request.method, request.uri),
       usefulException
     )
   }
@@ -219,22 +198,10 @@ class DefaultHttpErrorHandler(environment: Environment, configuration: Configura
    * Invoked in dev mode when a server error occurs.
    *
    * @param request The request that triggered the error.
-   * @param statusCode The error status code.  Must be greater or equal to 500, and less than 600.
    * @param exception The exception.
    */
-  protected def onDevServerError(request: RequestHeader, statusCode: Int, exception: UsefulException): Future[Result] =
-    Future.successful(Results.Status(statusCode)(views.html.defaultpages.devError(playEditor, exception)))
-
-  /**
-   * This method is no longer invoked by Play; override the version with the
-   * statusCode parameter instead.
-   *
-   * @param request The request that triggered the error.
-   * @param exception The exception.
-   */
-  @deprecated("Use the version of this method with the statusCode parameter", "2.6.0")
   protected def onDevServerError(request: RequestHeader, exception: UsefulException): Future[Result] =
-    onDevServerError(request, INTERNAL_SERVER_ERROR, exception)
+    Future.successful(InternalServerError(views.html.defaultpages.devError(playEditor, exception)))
 
   /**
    * Invoked in prod mode when a server error occurs.
@@ -243,22 +210,10 @@ class DefaultHttpErrorHandler(environment: Environment, configuration: Configura
    * in dev mode.
    *
    * @param request The request that triggered the error.
-   * @param statusCode The error status code.  Must be greater or equal to 500, and less than 600.
    * @param exception The exception.
    */
-  protected def onProdServerError(request: RequestHeader, statusCode: Int, exception: UsefulException): Future[Result] =
-    Future.successful(Results.Status(statusCode)(views.html.defaultpages.error(exception)))
-
-  /**
-   * This method is no longer invoked by Play; override the version with the
-   * statusCode parameter instead.
-   *
-   * @param request The request that triggered the error.
-   * @param exception The exception.
-   */
-  @deprecated("Use the version of this method with the statusCode parameter", "2.6.0")
   protected def onProdServerError(request: RequestHeader, exception: UsefulException): Future[Result] =
-    onProdServerError(request, INTERNAL_SERVER_ERROR, exception)
+    Future.successful(InternalServerError(views.html.defaultpages.error(exception)))
 
 }
 
@@ -309,8 +264,8 @@ object LazyHttpErrorHandler extends HttpErrorHandler {
   def onClientError(request: RequestHeader, statusCode: Int, message: String) =
     errorHandler.onClientError(request, statusCode, message)
 
-  def onServerError(request: RequestHeader, statusCode: Int, exception: Throwable) =
-    errorHandler.onServerError(request, statusCode, exception)
+  def onServerError(request: RequestHeader, exception: Throwable) =
+    errorHandler.onServerError(request, exception)
 }
 
 /**
@@ -323,6 +278,6 @@ private[play] class JavaHttpErrorHandlerDelegate @Inject() (delegate: HttpErrorH
   def onClientError(request: Http.RequestHeader, statusCode: Int, message: String) =
     FutureConverters.toJava(delegate.onClientError(request._underlyingHeader(), statusCode, message).map(_.asJava))
 
-  def onServerError(request: Http.RequestHeader, statusCode: Int, exception: Throwable) =
-    FutureConverters.toJava(delegate.onServerError(request._underlyingHeader(), statusCode, exception).map(_.asJava))
+  def onServerError(request: Http.RequestHeader, exception: Throwable) =
+    FutureConverters.toJava(delegate.onServerError(request._underlyingHeader(), exception).map(_.asJava))
 }

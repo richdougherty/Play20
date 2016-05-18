@@ -11,7 +11,7 @@ import scala.concurrent.Future
 import java.net.{ URI, URISyntaxException }
 
 import play.api.LoggerLike
-import play.api.http.{ HttpErrorHandler, HeaderNames, HttpVerbs, Status }
+import play.api.http.{ HttpErrorHandler, HeaderNames, HttpVerbs }
 import play.api.mvc.{ RequestHeader, Results, Result }
 
 /**
@@ -143,10 +143,10 @@ private[cors] trait AbstractCORSPolicy {
       // We must recover any errors so that we can add the headers to them to allow clients to see the result
       val result = try {
         next(taggedRequest).recoverWith {
-          case e: Throwable => errorHandler.onServerError(taggedRequest, Status.INTERNAL_SERVER_ERROR, e)
+          case e: Throwable => errorHandler.onServerError(taggedRequest, e)
         }
       } catch {
-        case e: Throwable => errorHandler.onServerError(taggedRequest, Status.INTERNAL_SERVER_ERROR, e)
+        case e: Throwable => errorHandler.onServerError(taggedRequest, e)
       }
       result.map(_.withHeaders(headerBuilder.result(): _*))
     }

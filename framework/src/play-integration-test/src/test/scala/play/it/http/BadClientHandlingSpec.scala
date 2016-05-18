@@ -56,7 +56,7 @@ trait BadClientHandlingSpec extends PlaySpecification with ServerIntegrationSpec
     "allow accessing the raw unparsed path from an error handler" in withServer(new HttpErrorHandler() {
       def onClientError(request: RequestHeader, statusCode: Int, message: String) =
         Future.successful(Results.BadRequest("Bad path: " + request.path))
-      def onServerError(request: RequestHeader, statusCode: Int, exception: Throwable) = Future.successful(Results.Ok)
+      def onServerError(request: RequestHeader, exception: Throwable) = Future.successful(Results.Ok)
     }) { port =>
       val response = BasicHttpClient.makeRequests(port)(
         BasicRequest("GET", "/[", "HTTP/1.1", Map(), "")
