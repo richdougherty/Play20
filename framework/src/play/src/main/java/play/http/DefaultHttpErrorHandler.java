@@ -18,6 +18,7 @@ import play.api.UsefulException;
 import play.api.http.HttpErrorHandlerExceptions;
 import play.api.routing.Router;
 import play.mvc.Http.RequestHeader;
+import play.mvc.Http.Status;
 import play.mvc.Result;
 import play.mvc.Results;
 import scala.Option;
@@ -134,20 +135,25 @@ public class DefaultHttpErrorHandler implements HttpErrorHandler {
      * mode, that you override [[onProdServerError()]] instead of this method.
      *
      * @param request The request that triggered the server error.
+     * @param statusCode The error status code.  Must be greater or equal to 500, and less than 600.
      * @param exception The server error.
      */
     @Override
-    public CompletionStage<Result> onServerError(RequestHeader request, Throwable exception) {
+    public CompletionStage<Result> onServerError(RequestHeader request, int statusCode, Throwable exception) {
         try {
+            if (statusCode < 500 || statusCode >= 600) {
+                throw new IllegalArgumentException("onServerError invoked with non server error status code " + statusCode + ": " + exception);
+            }
+
             UsefulException usefulException = throwableToUsefulException(exception);
 
-            logServerError(request, usefulException);
+            logServerError(request, statusCode, usefulException);
 
             switch (environment.mode()) {
                 case PROD:
-                    return onProdServerError(request, usefulException);
+                    return onProdServerError(request, statusCode, usefulException);
                 default:
-                    return onDevServerError(request, usefulException);
+                    return onDevServerError(request, statusCode, usefulException);
             }
         } catch (Exception e) {
             Logger.error("Error while handling error", e);
@@ -163,9 +169,9 @@ public class DefaultHttpErrorHandler implements HttpErrorHandler {
      * @param request The request that triggered the server error.
      * @param usefulException The server error.
      */
-    protected void logServerError(RequestHeader request, UsefulException usefulException) {
-        Logger.error(String.format("\n\n! @%s - Internal server error, for (%s) [%s] ->\n",
-                        usefulException.id, request.method(), request.uri()),
+    protected void logServerError(RequestHeader request, int statusCode, UsefulException usefulException) {
+        Logger.error(String.format("\n\n! @%s - Internal server error (%s), for (%s) [%s] ->\n",
+                        usefulException.id, statusCode, request.method(), request.uri()),
                 usefulException
         );
     }
@@ -186,8 +192,21 @@ public class DefaultHttpErrorHandler implements HttpErrorHandler {
      * @param request The request that triggered the error.
      * @param exception The exception.
      */
+    protected CompletionStage<Result> onDevServerError(RequestHeader request, int statusCode, UsefulException exception) {
+        return CompletableFuture.completedFuture(Results.status(statusCode, views.html.defaultpages.devError.render(playEditor, exception)));
+    }
+
+    /**
+     * This method is no longer invoked by Play; override the version with the
+     * statusCode parameter instead.
+     *
+     * @param request The request that triggered the error.
+     * @param exception The exception.
+     * @deprecated Use the version of this method with the statusCode parameter.
+     */
+    @Deprecated
     protected CompletionStage<Result> onDevServerError(RequestHeader request, UsefulException exception) {
-        return CompletableFuture.completedFuture(Results.internalServerError(views.html.defaultpages.devError.render(playEditor, exception)));
+        return onDevServerError(request, Status.INTERNAL_SERVER_ERROR, exception);
     }
 
     /**
@@ -199,8 +218,21 @@ public class DefaultHttpErrorHandler implements HttpErrorHandler {
      * @param request The request that triggered the error.
      * @param exception The exception.
      */
+    protected CompletionStage<Result> onProdServerError(RequestHeader request, int statusCode, UsefulException exception) {
+        return CompletableFuture.completedFuture(Results.status(statusCode, views.html.defaultpages.error.render(exception)));
+    }
+
+    /**
+     * This method is no longer invoked by Play; override the version with the
+     * statusCode parameter instead.
+     *
+     * @param request The request that triggered the error.
+     * @param exception The exception.
+     * @deprecated Use the version of this method with the statusCode parameter.
+     */
+    @Deprecated
     protected CompletionStage<Result> onProdServerError(RequestHeader request, UsefulException exception) {
-        return CompletableFuture.completedFuture(Results.internalServerError(views.html.defaultpages.error.render(exception)));
+        return onProdServerError(request, Status.INTERNAL_SERVER_ERROR, exception);
     }
 
 }

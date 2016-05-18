@@ -208,7 +208,7 @@ trait FiltersSpec extends Specification with ServerIntegrationSpecification {
       def onClientError(request: RequestHeader, statusCode: Int, message: String) = {
         Future.successful(Results.NotFound(request.headers.get(filterAddedHeaderKey).getOrElse("undefined header")))
       }
-      def onServerError(request: RequestHeader, exception: Throwable) = Future.successful(Results.InternalServerError)
+      def onServerError(request: RequestHeader, statusCode: Int, exception: Throwable) = Future.successful(Results.Status(statusCode))
     }
 
     "requests not matching a route should receive a RequestHeader modified by upstream filters" in withServer(errorHandler = Some(CustomErrorHandler))(CustomHeaderFilter) { ws =>

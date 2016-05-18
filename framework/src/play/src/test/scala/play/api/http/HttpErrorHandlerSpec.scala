@@ -33,13 +33,22 @@ object HttpErrorHandlerSpec extends Specification {
       }
       "render a generic client error" in {
         await(errorHandler.onClientError(FakeRequest(), 418)).header.status must_== 418
+        await(errorHandler.onClientError(FakeRequest(), 499)).header.status must_== 499
       }
       "refuse to render something that isn't a client error" in {
         await(errorHandler.onClientError(FakeRequest(), 500)).header.status must throwAn[IllegalArgumentException]
         await(errorHandler.onClientError(FakeRequest(), 399)).header.status must throwAn[IllegalArgumentException]
       }
       "render a server error" in {
-        await(errorHandler.onServerError(FakeRequest(), new RuntimeException())).header.status must_== 500
+        await(errorHandler.onServerError(FakeRequest(), 500, new RuntimeException())).header.status must_== 500
+        await(errorHandler.onServerError(FakeRequest(), 505, new RuntimeException())).header.status must_== 505
+        await(errorHandler.onServerError(FakeRequest(), 599, new RuntimeException())).header.status must_== 599
+      }
+      "complain about out-of-range status codes" in {
+        errorHandler.onClientError(FakeRequest(), 399) must throwAn[IllegalArgumentException]
+        errorHandler.onClientError(FakeRequest(), 500) must throwAn[IllegalArgumentException]
+        await(errorHandler.onServerError(FakeRequest(), 499, new RuntimeException())).header.status must_== 500
+        await(errorHandler.onServerError(FakeRequest(), 600, new RuntimeException())).header.status must_== 500
       }
     }
 
@@ -81,14 +90,14 @@ object HttpErrorHandlerSpec extends Specification {
   class CustomScalaErrorHandler extends HttpErrorHandler {
     def onClientError(request: RequestHeader, statusCode: Int, message: String) =
       Future.successful(Results.Ok)
-    def onServerError(request: RequestHeader, exception: Throwable) =
+    def onServerError(request: RequestHeader, statusCode: Int, exception: Throwable) =
       Future.successful(Results.Ok)
   }
 
   class CustomJavaErrorHandler extends play.http.HttpErrorHandler {
     def onClientError(req: play.mvc.Http.RequestHeader, status: Int, msg: String) =
       CompletableFuture.completedFuture(play.mvc.Results.ok())
-    def onServerError(req: play.mvc.Http.RequestHeader, exception: Throwable) =
+    def onServerError(req: play.mvc.Http.RequestHeader, status: Int, exception: Throwable) =
       CompletableFuture.completedFuture(play.mvc.Results.ok())
   }
 
