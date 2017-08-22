@@ -4,9 +4,10 @@
 import BuildSettings._
 import Dependencies._
 import Generators._
-import com.typesafe.tools.mima.plugin.MimaKeys.{ mimaPreviousArtifacts, mimaReportBinaryIssues }
+import com.typesafe.tools.mima.plugin.MimaKeys.{mimaPreviousArtifacts, mimaReportBinaryIssues}
 import interplay.PlayBuildBase.autoImport._
 import sbt.Keys.parallelExecution
+import com.lightbend.sbt.javaagent.JavaAgent.JavaAgentKeys.javaAgents
 import sbt.ScriptedPlugin._
 import sbt._
 
@@ -231,10 +232,13 @@ lazy val PlayFiltersHelpersProject = PlayCrossBuiltProject("Filters-Helpers", "p
 
 // This project is just for testing Play, not really a public artifact
 lazy val PlayIntegrationTestProject = PlayCrossBuiltProject("Play-Integration-Test", "play-integration-test")
+    .enablePlugins(JavaAgent)
     .settings(
-      libraryDependencies += h2database % Test,
+      libraryDependencies += okHttp % Test,
       parallelExecution in Test := false,
-      mimaPreviousArtifacts := Set.empty
+      mimaPreviousArtifacts := Set.empty,
+      fork in Test := true,
+      javaAgents += jettyAlpnAgent % "test"
     )
     .dependsOn(
       PlayProject % "test->test",
@@ -247,6 +251,7 @@ lazy val PlayIntegrationTestProject = PlayCrossBuiltProject("Play-Integration-Te
     .dependsOn(PlayJavaProject)
     .dependsOn(PlayJavaFormsProject)
     .dependsOn(PlayAkkaHttpServerProject)
+    .dependsOn(PlayAkkaHttp2SupportProject)
     .dependsOn(PlayNettyServerProject)
 
 // This project is just for microbenchmarking Play, not really a public artifact

@@ -50,6 +50,9 @@ object Dependencies {
   val acolyteVersion = "1.0.44-j7p"
   val acolyte = "org.eu.acolyte" % "jdbc-driver" % acolyteVersion
 
+  // When updating the agent version number, also update the version number in the PlayAkkaHttp2Support plugin
+  val jettyAlpnAgent = "org.mortbay.jetty.alpn" % "jetty-alpn-agent" % "2.0.6"
+
   val jjwt = "io.jsonwebtoken" % "jjwt" % "0.7.0"
 
   val jdbcDeps = Seq(
@@ -158,6 +161,8 @@ object Dependencies {
   ) ++ specsBuild.map(_ % Test)
 
   val nettyUtilsDependencies = slf4j
+
+  val okHttp = "com.squareup.okhttp3" % "okhttp" % "3.8.1"
 
   def routesCompilerDependencies(scalaVersion: String) = Seq(
     "commons-io" % "commons-io" % "2.5",

@@ -113,6 +113,7 @@ object PlayAkkaHttp2Support extends AutoPlugin {
 
   override def projectSettings = Seq(
     libraryDependencies += "com.typesafe.play" %% "play-akka-http2-support" % play.core.PlayVersion.current,
+    // When updating the agent version number, also update the version number in Dependencies.scala
     javaAgents += "org.mortbay.jetty.alpn" % "jetty-alpn-agent" % "2.0.6" % "compile;test"
   )
 }
