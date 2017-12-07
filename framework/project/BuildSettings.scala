@@ -9,8 +9,7 @@ import com.typesafe.tools.mima.core._
 import com.typesafe.tools.mima.plugin.MimaKeys._
 import com.typesafe.tools.mima.plugin.MimaPlugin._
 
-import de.heikoseeberger.sbtheader.HeaderKey._
-import de.heikoseeberger.sbtheader.HeaderPattern
+import de.heikoseeberger.sbtheader.HeaderPlugin.autoImport._
 
 import scalariform.formatter.preferences._
 import com.typesafe.sbt.SbtScalariform.autoImport._
@@ -42,19 +41,8 @@ object BuildSettings {
    * File header settings
    */
   val fileHeaderSettings = Seq(
-    excludes := Seq("*/cookie/encoding/*", "*/inject/SourceProvider.java"),
-    headers := Map(
-      "scala" -> (HeaderPattern.cStyleBlockComment,
-        """|/*
-           | * Copyright (C) 2009-2017 Lightbend Inc. <https://www.lightbend.com>
-           | */
-           |""".stripMargin),
-      "java"  -> (HeaderPattern.cStyleBlockComment,
-        """|/*
-           | * Copyright (C) 2009-2017 Lightbend Inc. <https://www.lightbend.com>
-           | */
-           |""".stripMargin)
-    )
+    excludeFilter.in(unmanagedSources.in(headerCreate)) := HiddenFileFilter || "*/cookie/encoding/*" || "*/inject/SourceProvider.java",
+    headerLicense := Some(HeaderLicense.Custom("Copyright (C) 2009-2017 Lightbend Inc. <https://www.lightbend.com>"))
   )
 
   private val VersionPattern = """^(\d+).(\d+).(\d+)(-.*)?""".r
