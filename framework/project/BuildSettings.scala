@@ -19,6 +19,7 @@ import interplay.Omnidoc.autoImport._
 import interplay.PlayBuildBase.autoImport._
 
 import scala.util.control.NonFatal
+import scala.sys.process._
 
 object BuildSettings {
 
@@ -294,16 +295,16 @@ object BuildSettings {
   )
 
   def playScriptedSettings: Seq[Setting[_]] = Seq(
-    ScriptedPlugin.scripted := ScriptedPlugin.scripted.tag(Tags.Test).evaluated,
-    scriptedLaunchOpts ++= Seq(
+    PlaySbtCompat.scriptedTask := PlaySbtCompat.scriptedTask.tag(Tags.Test).evaluated,
+    PlaySbtCompat.scriptedLaunchOpts ++= Seq(
       "-Xmx768m",
       maxMetaspace,
       "-Dscala.version=" + sys.props.get("scripted.scala.version").orElse(sys.props.get("scala.version")).getOrElse("2.12.4")
     )
   )
 
-  def playFullScriptedSettings: Seq[Setting[_]] = ScriptedPlugin.scriptedSettings ++ Seq(
-    ScriptedPlugin.scriptedLaunchOpts += s"-Dproject.version=${version.value}"
+  def playFullScriptedSettings: Seq[Setting[_]] = PlaySbtCompat.scriptedSettings ++ Seq(
+    PlaySbtCompat.scriptedLaunchOpts += s"-Dproject.version=${version.value}"
   ) ++ playScriptedSettings
 
   /**

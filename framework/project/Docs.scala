@@ -4,6 +4,7 @@
 import sbt._
 import sbt.Keys._
 import sbt.File
+import sbt.internal._
 import java.net.URLClassLoader
 import org.webjars.{ FileSystemCache, WebJarExtractor }
 import interplay.Playdoc
