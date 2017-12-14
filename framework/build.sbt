@@ -5,7 +5,10 @@ import BuildSettings._
 import Dependencies._
 import Generators._
 import com.typesafe.tools.mima.plugin.MimaKeys.{mimaPreviousArtifacts, mimaReportBinaryIssues}
-import interplay.PlayBuildBase.autoImport._
+import interplay.PlayBuildBase.autoImport._ // Needed for sbt 0.13
+import interplay.Playdoc.autoImport.{Docs => DocsConfig}
+import interplay.PlaySbtCompat
+import interplay.PlaySbtCompat.PathCompat
 import sbt.Keys.parallelExecution
 import com.lightbend.sbt.javaagent.JavaAgent.JavaAgentKeys.{javaAgents, resolvedJavaAgents}
 import com.lightbend.sbt.javaagent.JavaAgent.ResolvedAgent
@@ -52,6 +55,7 @@ lazy val PlayJodaFormsProject = PlayCrossBuiltProject("Play-Joda-Forms", "play-j
 
 lazy val PlayProject = PlayCrossBuiltProject("Play", "play")
     .enablePlugins(SbtTwirl)
+    .configs(DocsConfig)
     .settings(
       libraryDependencies ++= runtime(scalaVersion.value) ++ scalacheckDependencies ++ cookieEncodingDependencies :+
         jimfs % Test,
@@ -69,12 +73,12 @@ lazy val PlayProject = PlayCrossBuiltProject("Play", "play")
         // Add both the templates, useful for end users to read, and the Scala sources that they get compiled to,
         // so omnidoc can compile and produce scaladocs for them.
         val twirlSources = (sources in(Compile, TwirlKeys.compileTemplates)).value pair
-            relativeTo((sourceDirectories in(Compile, TwirlKeys.compileTemplates)).value)
+            PathCompat.relativeTo((sourceDirectories in(Compile, TwirlKeys.compileTemplates)).value)
 
         val twirlTarget = (target in(Compile, TwirlKeys.compileTemplates)).value
         // The pair with errorIfNone being false both creates the mappings, and filters non twirl outputs out of
         // managed sources
-        val twirlCompiledSources = (managedSources in Compile).value.pair(relativeTo(twirlTarget), errorIfNone = false)
+        val twirlCompiledSources = (managedSources in Compile).value.pair(PathCompat.relativeTo(twirlTarget), errorIfNone = false)
 
         twirlSources ++ twirlCompiledSources
       },
@@ -381,7 +385,7 @@ lazy val publishedProjects = Seq[ProjectReference](
 lazy val PlayFramework = Project("Play-Framework", file("."))
     .enablePlugins(PlayRootProject)
     .enablePlugins(PlayWhitesourcePlugin)
-    .enablePlugins(CrossPerProjectPlugin)
+    //.enablePlugins(CrossPerProjectPlugin)
     .settings(playCommonSettings: _*)
     .settings(
       scalaVersion := (scalaVersion in PlayProject).value,
@@ -390,9 +394,9 @@ lazy val PlayFramework = Project("Play-Framework", file("."))
       libraryDependencies ++= (runtime(scalaVersion.value) ++ jdbcDeps),
       Docs.apiDocsInclude := false,
       Docs.apiDocsIncludeManaged := false,
-      mimaReportBinaryIssues := (),
+      mimaReportBinaryIssues := (()),
       commands += Commands.quickPublish,
       whitesourceAggregateProjectName := "playframework-master",
       whitesourceAggregateProjectToken := "f21388d8-a520-4d3a-afbd-b5cadcea0a6d"
-    ).settings(Release.settings: _*)
+    )//.settings(Release.settings: _*)
     .aggregate(publishedProjects: _*)
