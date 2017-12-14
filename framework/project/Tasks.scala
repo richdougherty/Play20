@@ -5,6 +5,7 @@
 import sbt._
 import sbt.Keys._
 import sbt.complete.Parsers
+import interplay.PlaySbtCompat.LoadCompat
 
 object Generators {
   // Generates a scala file that contains the play version for use at runtime.
@@ -49,7 +50,7 @@ object Commands {
 
     val filtered = session.mergeSettings.filter { setting =>
       setting.key match {
-         case Def.ScopedKey(Scope(_, Global, Global, Global), key)
+         case Def.ScopedKey(Scope(_, Zero, Zero, Zero), key)
            if key == publishArtifact.key => false
          case other => true
       }
@@ -61,7 +62,7 @@ object Commands {
       state.log.info("Turning on quick publish")
     }
 
-    val newStructure = Load.reapply(filtered ++ Seq(
+    val newStructure = LoadCompat.reapply(filtered ++ Seq(
       publishArtifact in GlobalScope in packageDoc := toggle,
       publishArtifact in GlobalScope in packageSrc := toggle,
       publishArtifact in GlobalScope := true
