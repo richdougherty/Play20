@@ -28,10 +28,10 @@ object BuildSettings {
 
   val snapshotBranch: String = {
     try {
-      val branch = "git rev-parse --abbrev-ref HEAD".!!.trim
+      val branch = PlaySbtCompat.Process("git rev-parse --abbrev-ref HEAD").!!.trim
       if (branch == "HEAD") {
         // not on a branch, get the hash
-        "git rev-parse HEAD".!!.trim
+        PlaySbtCompat.Process("git rev-parse HEAD").!!.trim
       } else branch
     } catch {
       case NonFatal(_) => "unknown"
