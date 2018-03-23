@@ -117,16 +117,16 @@ private class SinkAccumulator[-E, +A](wrappedSink: => Sink[E, Future[A]]) extend
   private lazy val sink: Sink[E, Future[A]] = wrappedSink
 
   def map[B](f: A => B)(implicit executor: ExecutionContext): Accumulator[E, B] =
-    new SinkAccumulator(sink.mapMaterializedValue(_.map(f)))
+    new SinkAccumulator(sink.mapMaterializedValue(_.map(f)(executor.prepare())))
 
   def mapFuture[B](f: A => Future[B])(implicit executor: ExecutionContext): Accumulator[E, B] =
-    new SinkAccumulator(sink.mapMaterializedValue(_.flatMap(f)))
+    new SinkAccumulator(sink.mapMaterializedValue(_.flatMap(f)(executor.prepare())))
 
   def recover[B >: A](pf: PartialFunction[Throwable, B])(implicit executor: ExecutionContext): Accumulator[E, B] =
-    new SinkAccumulator(sink.mapMaterializedValue(_.recover(pf)))
+    new SinkAccumulator(sink.mapMaterializedValue(_.recover(pf)(executor.prepare())))
 
   def recoverWith[B >: A](pf: PartialFunction[Throwable, Future[B]])(implicit executor: ExecutionContext): Accumulator[E, B] =
-    new SinkAccumulator(sink.mapMaterializedValue(_.recoverWith(pf)))
+    new SinkAccumulator(sink.mapMaterializedValue(_.recoverWith(pf)(executor.prepare())))
 
   def through[F](flow: Flow[F, E, _]): Accumulator[F, A] =
     new SinkAccumulator(flow.toMat(sink)(Keep.right))
@@ -162,7 +162,7 @@ private class StrictAccumulator[-E, +A](handler: Option[E] => Future[A], val toS
     mapMat { future =>
       future.value match {
         case Some(Success(a)) => Future.fromTry(Try(f(a))) // optimize already completed case
-        case _ => future.map(f)
+        case _ => future.map(f)(executor.prepare())
       }
     }
 
@@ -175,7 +175,7 @@ private class StrictAccumulator[-E, +A](handler: Option[E] => Future[A], val toS
             case Success(fut) => fut
             case Failure(ex) => Future.failed(ex)
           }
-        case _ => future.flatMap(f)
+        case _ => future.flatMap(f)(executor.prepare())
       }
     }
 
@@ -183,7 +183,7 @@ private class StrictAccumulator[-E, +A](handler: Option[E] => Future[A], val toS
     mapMat { future =>
       future.value match {
         case Some(Success(a)) => future // optimize already completed case
-        case _ => future.recover(pf)
+        case _ => future.recover(pf)(executor.prepare())
       }
     }
 
@@ -191,7 +191,7 @@ private class StrictAccumulator[-E, +A](handler: Option[E] => Future[A], val toS
     mapMat { future =>
       future.value match {
         case Some(Success(a)) => future // optimize already completed case
-        case _ => future.recoverWith(pf)
+        case _ => future.recoverWith(pf)(executor.prepare())
       }
     }
 
@@ -225,10 +225,10 @@ private class FlattenedAccumulator[-E, +A](future: Future[Accumulator[E, A]])(im
   extends SinkAccumulator[E, A](Accumulator.futureToSink(future)) {
 
   override def run(source: Source[E, _])(implicit materializer: Materializer): Future[A] = {
-    future.flatMap(_.run(source))(materializer.executionContext)
+    future.flatMap(_.run(source))(materializer.executionContext.prepare())
   }
 
-  override def run()(implicit materializer: Materializer): Future[A] = future.flatMap(_.run())(materializer.executionContext)
+  override def run()(implicit materializer: Materializer): Future[A] = future.flatMap(_.run())(materializer.executionContext.prepare())
 
 }
 
