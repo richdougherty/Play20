@@ -9,7 +9,13 @@ import buildinfo.BuildInfo
 object Dependencies {
 
   val akkaVersion = "2.5.11"
+<<<<<<< HEAD
   val akkaHttpVersion = "10.1.1"
+||||||| merged common ancestors
+  val akkaHttpVersion = "10.1.0"
+=======
+  val akkaHttpVersion = "10.0.13"
+>>>>>>> Change Akka HTTP backend to use raw headers
   val playJsonVersion = "2.6.9"
 
   val logback = "ch.qos.logback" % "logback-classic" % "1.2.3"
