@@ -333,7 +333,9 @@ trait BuiltInComponents extends I18nComponents {
     router,
     httpErrorHandler,
     httpConfiguration,
-    httpFilters)
+    httpFilters,
+    executionContext,
+    materializer)
 
   lazy val application: Application = new DefaultApplication(environment, applicationLifecycle, injector,
     configuration, requestFactory, httpRequestHandler, httpErrorHandler, actorSystem, materializer)

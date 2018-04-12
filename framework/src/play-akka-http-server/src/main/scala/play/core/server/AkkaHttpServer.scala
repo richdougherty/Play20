@@ -306,8 +306,6 @@ class AkkaHttpServer(
     action: EssentialAction,
     errorHandler: HttpErrorHandler)(implicit ec: ExecutionContext): Future[HttpResponse] = {
 
-    val futureAcc: Future[Accumulator[ByteString, Result]] = Future(action(taggedRequestHeader))
-
     val source = if (request.header[Expect].contains(Expect.`100-continue`)) {
       // If we expect 100 continue, then we must not feed the source into the accumulator until the accumulator
       // requests demand.  This is due to a semantic mismatch between Play and Akka-HTTP, Play signals to continue
@@ -318,22 +316,28 @@ class AkkaHttpServer(
       requestBodySource
     }
 
-    // here we use FastFuture so the flatMap shouldn't actually need the executionContext
-    val resultFuture: Future[Result] = futureAcc.fast.flatMap { actionAccumulator =>
+    val resultFuture: Future[Result] = try {
+      val acc: Accumulator[ByteString, Result] = action(taggedRequestHeader)
       source match {
-        case Left(bytes) if bytes.isEmpty => actionAccumulator.run()
-        case Left(bytes) => actionAccumulator.run(bytes)
-        case Right(s) => actionAccumulator.run(s)
+        case Left(bytes) if bytes.isEmpty => acc.run()
+        case Left(bytes) => acc.run(bytes)
+        case Right(s) => acc.run(s)
       }
-    }.recoverWith {
-      case e: Throwable =>
-        errorHandler.onServerError(taggedRequestHeader, e)
+    } catch {
+      case NonFatal(e) =>
+        Future.failed(e)
     }
-    val responseFuture: Future[HttpResponse] = resultFuture.flatMap { result =>
+
+    val resultOrErrorResult: Future[Result] = resultFuture.recoverWith {
+      case e: Throwable => errorHandler.onServerError(taggedRequestHeader, e)
+    }
+
+    val akkaResponse: Future[HttpResponse] = resultOrErrorResult.flatMap { result =>
       val cleanedResult: Result = resultUtils(tryApp).prepareCookies(taggedRequestHeader, result)
       modelConversion(tryApp).convertResult(taggedRequestHeader, cleanedResult, request.protocol, errorHandler)
     }
-    responseFuture
+
+    akkaResponse
   }
 
   mode match {

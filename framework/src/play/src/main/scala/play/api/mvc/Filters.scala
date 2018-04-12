@@ -5,8 +5,9 @@ package play.api.mvc
 
 import akka.stream.Materializer
 import akka.util.ByteString
-import play.api.libs.streams.Accumulator
-import scala.concurrent.{ Promise, Future }
+import play.api.libs.streams.{ Accumulator, Execution }
+
+import scala.concurrent.{ Future, Promise }
 
 trait EssentialFilter {
   def apply(next: EssentialAction): EssentialAction
@@ -44,7 +45,6 @@ trait Filter extends EssentialFilter {
   def apply(f: RequestHeader => Future[Result])(rh: RequestHeader): Future[Result]
 
   def apply(next: EssentialAction): EssentialAction = {
-    implicit val ec = mat.executionContext
     new EssentialAction {
       def apply(rh: RequestHeader): Accumulator[ByteString, Result] = {
 
@@ -65,14 +65,14 @@ trait Filter extends EssentialFilter {
           // Therefore, as a fallback, we try to redeem the bodyAccumulator Promise here with an iteratee that consumes
           // the request body.
           bodyAccumulator.tryComplete(resultTry.map(simpleResult => Accumulator.done(simpleResult)))
-        })
+        })(Execution.trampoline)
 
         Accumulator.flatten(bodyAccumulator.future.map { it =>
           it.mapFuture { simpleResult =>
             // When the iteratee is done, we can redeem the promised result that was returned to the filter
             promisedResult.success(simpleResult)
             result
-          }.recoverWith {
+          }(Execution.trampoline).recoverWith {
             case t: Throwable =>
               // If the iteratee finishes with an error, fail the promised result that was returned to the
               // filter with the same error. Note, we MUST use tryFailure here as it's possible that a)
@@ -80,8 +80,8 @@ trait Filter extends EssentialFilter {
               // the result in that method caused an error, so we ended up in this recover block anyway.
               promisedResult.tryFailure(t)
               result
-          }
-        })
+          }(Execution.trampoline)
+        }(Execution.trampoline))
       }
 
     }

@@ -3,18 +3,21 @@
  */
 package play.api.http
 
+import akka.stream.Materializer
+import akka.util.ByteString
 import javax.inject.Inject
-
 import play.api.ApplicationLoader.DevContext
 import play.api.http.Status._
 import play.api.inject.{ Binding, BindingKey }
 import play.api.libs.streams.Accumulator
 import play.api.mvc._
 import play.api.routing.Router
-import play.api.{ Configuration, Environment, OptionalDevContext }
+import play.api.{ Configuration, Environment, Logger, OptionalDevContext }
 import play.core.j.{ JavaHandler, JavaHandlerComponents, JavaHttpRequestHandlerDelegate }
 import play.core.{ DefaultWebCommands, WebCommands }
 import play.utils.Reflect
+
+import scala.concurrent.{ ExecutionContext, Future }
 
 /**
  * Primary entry point for all HTTP requests on Play applications.
@@ -92,7 +95,18 @@ class DefaultHttpRequestHandler(
     router: Router,
     errorHandler: HttpErrorHandler,
     configuration: HttpConfiguration,
-    filters: Seq[EssentialFilter]) extends HttpRequestHandler {
+    filters: Seq[EssentialFilter],
+    defaultExecutionContext: ExecutionContext,
+    materializer: Materializer) extends HttpRequestHandler {
+
+  // This warning can be removed in Play 2.7 when the old constructors are removed.
+  if (defaultExecutionContext == null || materializer == null) {
+    val logger = Logger(getClass)
+    logger.warn(
+      "Please change your code to use a DefaultHttpRequestHandler constructor that hasn't been deprecated. " +
+        "Since Play 2.6.14 it the DefaultHttpRequestHandler code has been changed to require an ExecutionContext and " +
+        "a Materializer. Since no ExecutionContext has been provided, actions will run in the server thread.")
+  }
 
   @Inject
   def this(
@@ -101,18 +115,34 @@ class DefaultHttpRequestHandler(
     router: Router,
     errorHandler: HttpErrorHandler,
     configuration: HttpConfiguration,
-    filters: HttpFilters) = {
-    this(webCommands, optDevContext.devContext, router, errorHandler, configuration, filters.filters)
+    filters: HttpFilters,
+    defaultExecutionContext: ExecutionContext,
+    materializer: Materializer) = {
+    this(webCommands, optDevContext.devContext, router, errorHandler, configuration, filters.filters, defaultExecutionContext, materializer)
   }
 
-  @deprecated("Use the main DefaultHttpRequestHandler constructor", "2.7.0")
+  @deprecated("Use the main DefaultHttpRequestHandler constructor", "2.6.14")
+  def this(webCommands: WebCommands, router: Router, errorHandler: HttpErrorHandler, configuration: HttpConfiguration, filters: HttpFilters) = {
+    // Note: When removing this method in Play 2.7, remember to remove code that checks for null in this class.
+    this(webCommands, None, router, errorHandler, configuration, filters.filters, null, null)
+  }
+
+  @deprecated("Use the main DefaultHttpRequestHandler constructor", "2.6.14")
+  def this(webCommands: WebCommands, router: Router, errorHandler: HttpErrorHandler, configuration: HttpConfiguration, filters: EssentialFilter*) = {
+    // Note: When removing this method in Play 2.7, remember to remove code that checks for null in this class.
+    this(webCommands, None, router, errorHandler, configuration, filters, null, null)
+  }
+
+  @deprecated("Use the main DefaultHttpRequestHandler constructor", "2.6.14")
   def this(router: Router, errorHandler: HttpErrorHandler, configuration: HttpConfiguration, filters: HttpFilters) = {
-    this(new DefaultWebCommands, None, router, errorHandler, configuration, filters.filters)
+    // Note: When removing this method in Play 2.7, remember to remove code that checks for null in this class.
+    this(new DefaultWebCommands, None, router, errorHandler, configuration, filters.filters, null, null)
   }
 
-  @deprecated("Use the main DefaultHttpRequestHandler constructor", "2.7.0")
+  @deprecated("Use the main DefaultHttpRequestHandler constructor", "2.6.14")
   def this(router: Router, errorHandler: HttpErrorHandler, configuration: HttpConfiguration, filters: EssentialFilter*) = {
-    this(new DefaultWebCommands, None, router, errorHandler, configuration, filters)
+    // Note: When removing this method in Play 2.7, remember to remove code that checks for null in this class.
+    this(new DefaultWebCommands, None, router, errorHandler, configuration, filters, null, null)
   }
 
   private val context = configuration.context.stripSuffix("/")
@@ -206,7 +236,7 @@ class DefaultHttpRequestHandler(
   /**
    * Apply any filters to the given handler.
    */
-  @deprecated("Use filterHandler(RequestHeader, Handler) instead", "2.6.0")
+  @deprecated("No longer called. Use filterHandler(RequestHeader, Handler) instead", "2.6.0")
   protected def filterHandler(next: RequestHeader => Handler): (RequestHeader => Handler) = {
     (request: RequestHeader) =>
       next(request) match {
@@ -222,8 +252,29 @@ class DefaultHttpRequestHandler(
    */
   protected def filterHandler(request: RequestHeader, handler: Handler): Handler = {
     handler match {
-      case action: EssentialAction if inContext(request.path) => filterAction(action)
+      case originalAction: EssentialAction if inContext(request.path) =>
+        val filteredAction = filterAction(originalAction)
+        originalAction match {
+          case a: Action[_] => wrapActionInExecutionContext(filteredAction, a.executionContext)
+          case _: EssentialAction if defaultExecutionContext == null || materializer == null => filteredAction
+          case _: EssentialAction => wrapActionInExecutionContext(filteredAction, defaultExecutionContext)
+        }
       case handler => handler
+    }
+  }
+
+  /**
+   * Wrap an action so that, when executed, it runs the action logic in a given [[ExecutionContext]].
+   */
+  private def wrapActionInExecutionContext(action: EssentialAction, ec: ExecutionContext): EssentialAction = {
+    new EssentialAction {
+      override def apply(rh: RequestHeader): Accumulator[ByteString, Result] = {
+        Accumulator.flatten(
+          Future[Accumulator[ByteString, Result]] {
+            action(rh)
+          }(ec.prepare)
+        )(materializer)
+      }
     }
   }
 
@@ -268,8 +319,10 @@ class JavaCompatibleHttpRequestHandler(
     errorHandler: HttpErrorHandler,
     configuration: HttpConfiguration,
     filters: Seq[EssentialFilter],
-    handlerComponents: JavaHandlerComponents)
-  extends DefaultHttpRequestHandler(webCommands, optDevContext, router, errorHandler, configuration, filters) {
+    handlerComponents: JavaHandlerComponents,
+    defaultExecutionContext: ExecutionContext,
+    materializer: Materializer)
+  extends DefaultHttpRequestHandler(webCommands, optDevContext, router, errorHandler, configuration, filters, defaultExecutionContext, materializer) {
 
   @Inject
   def this(
@@ -279,14 +332,40 @@ class JavaCompatibleHttpRequestHandler(
     errorHandler: HttpErrorHandler,
     configuration: HttpConfiguration,
     filters: HttpFilters,
-    handlerComponents: JavaHandlerComponents) = {
-    this(webCommands, optDevContext.devContext, router, errorHandler, configuration, filters.filters, handlerComponents)
+    handlerComponents: JavaHandlerComponents,
+    defaultExecutionContext: ExecutionContext,
+    materializer: Materializer) = {
+    this(webCommands, optDevContext.devContext, router, errorHandler, configuration, filters.filters, handlerComponents, defaultExecutionContext, materializer)
   }
 
-  @deprecated("Use the main JavaCompatibleHttpRequestHandler constructor", "2.7.0")
+  @deprecated("Use the main JavaCompatibleHttpRequestHandler constructor", "2.6.14")
+  def this(
+    webCommands: WebCommands,
+    optDevContext: Option[DevContext],
+    router: Router,
+    errorHandler: HttpErrorHandler,
+    configuration: HttpConfiguration,
+    filters: Seq[EssentialFilter],
+    handlerComponents: JavaHandlerComponents) = {
+    this(webCommands, optDevContext, router, errorHandler, configuration, filters, handlerComponents, null, null)
+  }
+
+  @deprecated("Use the main JavaCompatibleHttpRequestHandler constructor", "2.6.14")
+  def this(
+    webCommands: WebCommands,
+    optDevContext: OptionalDevContext,
+    router: Router,
+    errorHandler: HttpErrorHandler,
+    configuration: HttpConfiguration,
+    filters: HttpFilters,
+    handlerComponents: JavaHandlerComponents) = {
+    this(webCommands, optDevContext.devContext, router, errorHandler, configuration, filters.filters, handlerComponents, null, null)
+  }
+
+  @deprecated("Use the main JavaCompatibleHttpRequestHandler constructor", "2.6.14")
   def this(router: Router, errorHandler: HttpErrorHandler,
     configuration: HttpConfiguration, filters: HttpFilters, handlerComponents: JavaHandlerComponents) = {
-    this(new DefaultWebCommands, new OptionalDevContext(None), router, errorHandler, configuration, filters, handlerComponents)
+    this(new DefaultWebCommands, new OptionalDevContext(None), router, errorHandler, configuration, filters, handlerComponents, null, null)
   }
 
   // This is a Handler that, when evaluated, converts its underlying JavaHandler into
