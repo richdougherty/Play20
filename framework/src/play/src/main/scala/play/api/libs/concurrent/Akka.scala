@@ -95,15 +95,14 @@ trait AkkaComponents {
  * Provider for the actor system
  */
 @Singleton
-class ActorSystemProvider @Inject() (environment: Environment, configuration: Configuration, applicationLifecycle: ApplicationLifecycle) extends Provider[ActorSystem] {
+class ActorSystemProvider @Inject() (playActorSystemConfig: PlayActorSystemConfig, applicationLifecycle: ApplicationLifecycle) extends Provider[ActorSystem] {
+
+  def this(environment: Environment, configuration: Configuration, applicationLifecycle: ApplicationLifecycle) =
+    this(PlayActorSystemConfig.create(environment.classLoader, configuration), applicationLifecycle)
 
   private val logger = Logger(classOf[ActorSystemProvider])
 
-  lazy val get: ActorSystem = {
-    val (system, stopHook) = ActorSystemProvider.start(environment.classLoader, configuration)
-    applicationLifecycle.addStopHook(stopHook)
-    system
-  }
+  lazy val get: ActorSystem = ActorSystemProvider.start(playActorSystemConfig, applicationLifecycle)
 
 }
 
@@ -137,7 +136,7 @@ object ActorSystemProvider {
    * @return The ActorSystem and a function that can be used to stop it.
    */
   def start(classLoader: ClassLoader, config: Configuration): (ActorSystem, StopHook) = {
-    start(classLoader, config, additionalSetup = None)
+    start(PlayActorSystemConfig.create(classLoader, config))
   }
 
   /**
@@ -146,49 +145,21 @@ object ActorSystemProvider {
    * @return The ActorSystem and a function that can be used to stop it.
    */
   def start(classLoader: ClassLoader, config: Configuration, additionalSetup: Setup): (ActorSystem, StopHook) = {
-    start(classLoader, config, Some(additionalSetup))
+    val baseConfig = PlayActorSystemConfig.create(classLoader, config)
+    start(baseConfig.copy(setup = baseConfig.setup.and(additionalSetup))
   }
 
-  private def start(classLoader: ClassLoader, config: Configuration, additionalSetup: Option[Setup]): (ActorSystem, StopHook) = {
-    val akkaConfig: Config = {
-      val akkaConfigRoot = config.get[String]("play.akka.config")
+  def start(playActorSystemConfig: PlayActorSystemConfig, applicationLifecycle: ApplicationLifecycle): ActorSystem = {
+    val (system, stopHook) = ActorSystemProvider.start(playActorSystemConfig)
+    applicationLifecycle.addStopHook(stopHook)
+    system
+  }
 
-      // normalize timeout values for Akka's use
-      val playTimeoutKey = "play.akka.shutdown-timeout"
-      val playTimeoutDuration = Try(config.get[Duration](playTimeoutKey)).getOrElse(Duration.Inf)
-
-      // Typesafe config used internally by Akka doesn't support "infinite".
-      // Also, the value expected is an integer so can't use Long.MaxValue.
-      // Finally, Akka requires the delay to be less than a certain threshold.
-      val akkaMaxDelay = Int.MaxValue / 1000
-      val akkaMaxDuration = Duration(akkaMaxDelay, "seconds")
-      val normalisedDuration =
-        if (playTimeoutDuration > akkaMaxDuration) akkaMaxDuration else playTimeoutDuration
-
-      val akkaTimeoutKey = "akka.coordinated-shutdown.phases.actor-system-terminate.timeout"
-      config.get[Config](akkaConfigRoot)
-        // Need to fallback to root config so we can lookup dispatchers defined outside the main namespace
-        .withFallback(config.underlying)
-        // Need to manually merge and override akkaTimeoutKey because `null` is meaningful in playTimeoutKey
-        .withValue(
-          akkaTimeoutKey,
-          ConfigValueFactory.fromAnyRef(java.time.Duration.ofMillis(normalisedDuration.toMillis))
-        )
-    }
-
-    val name = config.get[String]("play.akka.actor-system")
-
-    val bootstrapSetup = BootstrapSetup(Some(classLoader), Some(akkaConfig), None)
-    val actorSystemSetup = additionalSetup match {
-      case Some(setup) => ActorSystemSetup(bootstrapSetup, setup)
-      case None => ActorSystemSetup(bootstrapSetup)
-    }
-
-    val system = ActorSystem(name, actorSystemSetup)
+  def start(playActorSystemConfig: PlayActorSystemConfig): (ActorSystem, StopHook) = {
+    import playActorSystemConfig._
+    val system = ActorSystem(name, setup)
     logger.debug(s"Starting application default Akka system: $name")
-
     val stopHook = { () =>
-      val akkaRunCSFromPhase = config.get[String]("play.akka.run-cs-from-phase")
       logger.debug(s"Shutdown application default Akka system: $name")
       // Play's "play.akka.shutdown-timeout" is used to configure the timeout of
       // the 'actor-system-terminate' phase of Akka's CoordinatedShutdown
@@ -197,9 +168,8 @@ object ActorSystemProvider {
       // The phases that should be run is a configurable setting so Play users
       // that embed an Akka Cluster node can opt-in to using Akka's CS or continue
       // to use their own shutdown code.
-      CoordinatedShutdown(system).run(ApplicationShutdownReason, Some(akkaRunCSFromPhase))
+      CoordinatedShutdown(system).run(ApplicationShutdownReason, coordinatedShutdownFromPhase)
     }
-
     (system, stopHook)
   }
 
